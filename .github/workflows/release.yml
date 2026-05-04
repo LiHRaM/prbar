@@ -128,14 +128,13 @@ jobs:
               (git commit -m "release: appcast for ${GITHUB_REF_NAME}" && \
                git push origin gh-pages)))
 
-      # Publish via `gh` directly (not softprops) so we can preserve a
-      # pre-written release body when one already exists. Workflow runs
-      # *after* a draft release has been hand-crafted with the changelog
-      # — softprops's `body:` field overwrites unconditionally; this
-      # script only sets the default body when the existing one is
-      # empty. Always operate on a draft until assets land, then flip
-      # to published. Required when the repo has GitHub's "Immutable
-      # releases" turned on, since you can't add assets after publish.
+      # Publish via `gh` directly (not softprops) so we can:
+      #   1. preserve hand-written release notes when a draft exists,
+      #      otherwise auto-generate from the merged PRs / commits via
+      #      `--generate-notes`,
+      #   2. always upload assets to a draft before flipping to
+      #      published — required when the repo has GitHub's "Immutable
+      #      releases" turned on (you can't add assets after publish).
       - name: Publish GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         env:
@@ -144,28 +143,37 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          DEFAULT_BODY=$(cat <<'EOF'
-          Universal (arm64 + x86_64), Developer ID signed and notarized by Apple.
+          FOOTER=$(cat <<'EOF'
 
-          Drag PRBar.app into /Applications. No Gatekeeper prompt on first launch.
-
-          Auto-update: PRBar checks the [appcast feed](https://lustefaniak.github.io/prbar/appcast.xml) on launch via Sparkle.
+          ---
+          Universal (arm64 + x86_64), Developer ID signed and notarized by Apple. Drag PRBar.app into /Applications. Auto-update via [Sparkle appcast](https://lustefaniak.github.io/prbar/appcast.xml).
           EOF
           )
           if ! [ -f "$DMG_PATH" ]; then
             echo "::error::DMG not found at $DMG_PATH"
             exit 1
           fi
+          # `gh release edit` doesn't have --generate-notes; use the
+          # REST endpoint to render notes (Markdown body of merged PRs +
+          # contributors since the previous tag) and apply via --notes.
+          generate_notes() {
+            gh api -X POST "repos/${{ github.repository }}/releases/generate-notes" \
+              -f tag_name="$TAG" --jq .body
+          }
           if gh release view "$TAG" --json id >/dev/null 2>&1; then
             EXISTING_BODY=$(gh release view "$TAG" --json body --jq .body)
             if [ -z "$EXISTING_BODY" ]; then
-              echo "Setting default body (existing notes empty)."
-              gh release edit "$TAG" --notes "$DEFAULT_BODY"
+              echo "Generating notes (existing body empty)."
+              GEN=$(generate_notes)
+              gh release edit "$TAG" --notes "${GEN}${FOOTER}"
             else
               echo "Preserving existing release notes ($(echo "$EXISTING_BODY" | wc -c | tr -d ' ') chars)."
             fi
             gh release upload "$TAG" "$DMG_PATH" --clobber
             gh release edit "$TAG" --draft=false
           else
-            gh release create "$TAG" "$DMG_PATH" --title "$TAG" --notes "$DEFAULT_BODY"
+            GEN=$(generate_notes)
+            gh release create "$TAG" "$DMG_PATH" \
+              --title "$TAG" \
+              --notes "${GEN}${FOOTER}"
           fi
