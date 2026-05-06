@@ -16,7 +16,10 @@ struct PRListView: View {
 
     @Environment(DiffStore.self) private var diffStore
 
-    private let visibleLimit = 12
+    /// Cap how many rows we eagerly warm the diff cache for. The list
+    /// itself scrolls and shows every PR; this is just a courtesy
+    /// prefetch for the rows likely to be visible without scrolling.
+    private let prefetchLimit = 12
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -33,32 +36,30 @@ struct PRListView: View {
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
             } else {
-                ForEach(prs.prefix(visibleLimit)) { pr in
-                    PRRowView(
-                        pr: pr,
-                        isRefreshing: refreshingPRs.contains(pr.nodeId),
-                        isMerging: mergingPRs.contains(pr.nodeId),
-                        onRefresh: { onRefreshPR(pr) },
-                        onMerge: { method in onMergePR(pr, method) }
-                    )
-                    .contentShape(Rectangle())
-                    .onTapGesture { onSelect(pr) }
-                }
-                if prs.count > visibleLimit {
-                    Text("…and \(prs.count - visibleLimit) more")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                // Warm the diff cache for visible rows so clicking a PR
-                // typically lands on a cached diff. Each call is a no-op
-                // when the (prNodeId, headSha) is already loaded or in
-                // flight, so this is safe to call on every list re-render.
-                Color.clear.frame(height: 0)
-                    .task(id: prs.map(\.headSha).joined(separator: "|")) {
-                        for pr in prs.prefix(visibleLimit) {
-                            diffStore.ensureLoaded(for: pr)
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 6) {
+                        ForEach(prs) { pr in
+                            PRRowView(
+                                pr: pr,
+                                isRefreshing: refreshingPRs.contains(pr.nodeId),
+                                isMerging: mergingPRs.contains(pr.nodeId),
+                                onRefresh: { onRefreshPR(pr) },
+                                onMerge: { method in onMergePR(pr, method) }
+                            )
+                            .contentShape(Rectangle())
+                            .onTapGesture { onSelect(pr) }
                         }
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: .infinity)
+                // Warm the diff cache for the first few rows so clicking
+                // a PR near the top typically lands on a cached diff.
+                .task(id: prs.prefix(prefetchLimit).map(\.headSha).joined(separator: "|")) {
+                    for pr in prs.prefix(prefetchLimit) {
+                        diffStore.ensureLoaded(for: pr)
+                    }
+                }
                 if let error = lastError {
                     Text("Last fetch failed: \(error)")
                         .font(.caption2)
