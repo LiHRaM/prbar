@@ -41,5 +41,22 @@ jobs:
       - name: Build (Debug)
         run: ./bin/build
 
+      # Package the .app as a single zip so the bundle's structure,
+      # symlinks, and permissions survive the artifact round-trip
+      # (upload-artifact re-zips a raw directory and mangles bundles).
+      # Uploaded before Test so a red test run still leaves a downloadable
+      # build. The app is ad-hoc-signed (no Developer ID) — Gatekeeper
+      # quarantines it on download; right-click -> Open, or run
+      # `xattr -dr com.apple.quarantine PRBar.app` after unzipping.
+      - name: Package app
+        run: ditto -c -k --sequesterRsrc --keepParent build/Debug/PRBar.app PRBar-debug.app.zip
+
+      - name: Upload app artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PRBar-debug-app
+          path: PRBar-debug.app.zip
+          if-no-files-found: error
+
       - name: Test
         run: ./bin/test
