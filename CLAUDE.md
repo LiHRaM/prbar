@@ -50,6 +50,8 @@ DEVELOPMENT_TEAM=6NN252Q36S NOTARY_KEYCHAIN_PROFILE=prbar-notary ./bin/release-d
 
 **Apple notary queue is variable.** Median is 2-5 minutes; bad days are 30-60 minutes; rare incidents stall submissions for 24h+ as "In Progress" (the GitHub Action's 6h job timeout is well past Apple's normal worst case). Check https://developer.apple.com/system-status/ if a build is stuck. Killing a stuck `notarytool --wait` and resubmitting fresh is safe — the duplicate just waits in the same queue.
 
+**Cutting a release = push a `v*.*.*` tag on HEAD.** Version is fully tag-derived (`bin/version` reads the latest tag); no `project.yml`/plist edit needed. The notes are the changelog — there is no `CHANGELOG.md`. The workflow's `generate-notes` step only fills the body when it's **empty**; a non-empty body is **preserved**. So for real release notes either pre-create a draft with a hand-written body *before* tagging, or rewrite after with `gh release edit <tag> --notes-file <f>` (the workflow won't clobber it). House style: `## <headline>` + `### Added` / `### Changed` / `### Internal` sections + the existing signed/notarized footer line (see v0.5.0 for the template).
+
 Run a single test class:
 ```sh
 xcodebuild -project PRBar.xcodeproj -scheme PRBar -configuration Debug \
