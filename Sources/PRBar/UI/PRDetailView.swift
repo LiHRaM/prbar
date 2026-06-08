@@ -49,6 +49,10 @@ struct PRDetailView: View {
     @Environment(\.openWindow) private var openWindow
     @State private var bodyExpanded: Bool = false
     @State private var descriptionExpanded: Bool = false
+    /// Reviews & Comments default to collapsed so they don't push the
+    /// action buttons down the page — the collapsed header still shows a
+    /// per-reviewer verdict chip summary. Reset on PR switch.
+    @State private var reviewsExpanded: Bool = false
     @State private var branchCopied: Bool = false
 
     /// Set when the user clicks an annotation row → drives scroll +
@@ -125,7 +129,7 @@ struct PRDetailView: View {
                         // top once they scroll into the diff so Approve
                         // stays one click away. Plain VStack doesn't
                         // honour `pinnedViews`.
-                        LazyVStack(alignment: .leading, spacing: 12, pinnedViews: [.sectionHeaders]) {
+                        LazyVStack(alignment: .leading, spacing: 12) {
                             // Anchor target for the scroll-to-top button.
                             Color.clear.frame(height: 0).id("top")
                             if !pr.body.isEmpty {
@@ -136,17 +140,14 @@ struct PRDetailView: View {
                                 CIStatusView(checks: pr.allCheckSummaries, pr: pr)
                                 Divider()
                             }
+                            if !activityEntries.isEmpty {
+                                humanReviewsSection
+                                Divider()
+                            }
                             aiSection
 
-                            Section {
-                                diffSection
-                            } header: {
-                                if showsReviewActions {
-                                    stickyActionHeader
-                                } else {
-                                    Divider()
-                                }
-                            }
+                            Divider()
+                            diffSection
                         }
                     }
                     scrollToTopButton(proxy: proxy)
@@ -164,6 +165,15 @@ struct PRDetailView: View {
                         focusedDiffKey = nil
                     }
                 }
+            }
+
+            // Always-visible action footer: the card lives outside the
+            // ScrollView so it stays pinned to the bottom of the popover
+            // regardless of scroll position. Being a separate region (not
+            // an overlay on scrolled content) sidesteps the translucent
+            // bleed-through that plagued the old top-pinned header.
+            if showsReviewActions {
+                actionsCard
             }
         }
         .onAppear {
@@ -185,6 +195,7 @@ struct PRDetailView: View {
             bodyDraft = ""
             bodyDraftSeededForSha = nil
             includeAISummaryOverride = nil
+            reviewsExpanded = false
             seedBodyDraftFromAIIfNeeded()
         }
         .onChange(of: review?.summaryMarkdown ?? "") { _, _ in
@@ -341,9 +352,31 @@ struct PRDetailView: View {
                         .padding(.horizontal, 4)
                         .background(.secondary.opacity(0.15), in: Capsule())
                 }
+                if let mine = pr.myLastReview {
+                    myReviewBadge(mine)
+                }
             }
             .font(.caption)
         }
+    }
+
+    /// "You already reviewed" pill, surfaced at the top so it's visible
+    /// before the user scrolls into the reviews list or reaches for the
+    /// Approve button. Tinted by the verdict of the viewer's latest review.
+    @ViewBuilder
+    private func myReviewBadge(_ review: PRReviewSummary) -> some View {
+        let style = reviewStateStyle(review.state)
+        HStack(spacing: 3) {
+            Image(systemName: style.icon)
+            Text("You \(style.label)")
+        }
+        .font(.caption2.weight(.medium))
+        .foregroundStyle(style.color)
+        .padding(.horizontal, 5)
+        .padding(.vertical, 1)
+        .background(style.color.opacity(0.15), in: Capsule())
+        .help(review.submittedAt.map { "You reviewed \($0.formatted(.relative(presentation: .named)))" }
+            ?? "You already reviewed this PR")
     }
 
     /// PR description rendered as GitHub-flavored Markdown via
@@ -412,6 +445,176 @@ struct PRDetailView: View {
                 .buttonStyle(.plain)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
+        }
+    }
+
+    // MARK: - human reviews & comments
+
+    /// One entry in the merged people-activity timeline: either a
+    /// submitted review (verdict + optional body) or a conversation
+    /// comment. Built from `pr.humanReviews` + `pr.issueComments`.
+    private struct ActivityEntry: Identifiable {
+        enum Kind {
+            case review(PRReviewSummary)
+            case comment(PRCommentSummary)
+        }
+        let id: String
+        let date: Date?
+        let kind: Kind
+    }
+
+    /// Reviews and comments merged into one chronological list,
+    /// oldest-first (matches GitHub's conversation order).
+    private var activityEntries: [ActivityEntry] {
+        var items: [ActivityEntry] = []
+        for r in pr.humanReviews {
+            items.append(ActivityEntry(id: r.id, date: r.submittedAt, kind: .review(r)))
+        }
+        for c in pr.issueComments {
+            items.append(ActivityEntry(id: c.id, date: c.createdAt, kind: .comment(c)))
+        }
+        return items.sorted { ($0.date ?? .distantPast) < ($1.date ?? .distantPast) }
+    }
+
+    /// Visual treatment for a review state — shared by the timeline rows
+    /// and the header "You …" badge so the verdict reads the same in both.
+    private func reviewStateStyle(_ state: String) -> (icon: String, label: String, color: Color) {
+        switch state.uppercased() {
+        case "APPROVED":          return ("checkmark.seal.fill", "approved", .green)
+        case "CHANGES_REQUESTED": return ("xmark.octagon.fill", "requested changes", .red)
+        case "DISMISSED":         return ("slash.circle", "review dismissed", .secondary)
+        case "PENDING":           return ("pencil.circle", "pending review", .secondary)
+        default:                  return ("text.bubble", "commented", .secondary)
+        }
+    }
+
+    /// Latest review per distinct author, oldest-first — drives the
+    /// collapsed chip summary (one chip per reviewer, showing their
+    /// current verdict) without repeating a reviewer who reviewed twice.
+    private var reviewerSummaries: [PRReviewSummary] {
+        var latestByAuthor: [String: PRReviewSummary] = [:]
+        for r in pr.humanReviews { latestByAuthor[r.author] = r }
+        return latestByAuthor.values.sorted {
+            ($0.submittedAt ?? .distantPast) < ($1.submittedAt ?? .distantPast)
+        }
+    }
+
+    @ViewBuilder
+    private func reviewerChip(_ r: PRReviewSummary) -> some View {
+        let style = reviewStateStyle(r.state)
+        HStack(spacing: 2) {
+            Image(systemName: style.icon)
+                .foregroundStyle(style.color)
+            Text(r.isFromViewer ? "you" : r.author)
+                .foregroundStyle(.secondary)
+        }
+        .font(.caption2)
+        .help("\(r.isFromViewer ? "You" : "@\(r.author)") \(style.label)")
+    }
+
+    @ViewBuilder
+    private var humanReviewsSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.15)) { reviewsExpanded.toggle() }
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: reviewsExpanded ? "chevron.down" : "chevron.right")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                        Text("Reviews & Comments")
+                            .font(.subheadline.bold())
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+
+                if !reviewsExpanded {
+                    // Compact glance: one verdict chip per reviewer plus a
+                    // comment count, so the user sees who reviewed and how
+                    // without expanding (and without pushing actions down).
+                    ForEach(reviewerSummaries) { reviewerChip($0) }
+                    if !pr.issueComments.isEmpty {
+                        HStack(spacing: 2) {
+                            Image(systemName: "text.bubble")
+                            Text("\(pr.issueComments.count)")
+                        }
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .help("\(pr.issueComments.count) comment\(pr.issueComments.count == 1 ? "" : "s")")
+                    }
+                }
+
+                Spacer(minLength: 4)
+            }
+
+            if reviewsExpanded {
+                ForEach(activityEntries) { entry in
+                    activityRow(entry)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func activityRow(_ entry: ActivityEntry) -> some View {
+        switch entry.kind {
+        case .review(let r):
+            let style = reviewStateStyle(r.state)
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    Image(systemName: style.icon)
+                        .foregroundStyle(style.color)
+                        .font(.caption)
+                    Text(r.isFromViewer ? "You" : "@\(r.author)")
+                        .font(.caption.bold())
+                    Text(style.label)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    if let d = r.submittedAt {
+                        Text("· \(d.formatted(.relative(presentation: .named)))")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                }
+                if !r.body.isEmpty {
+                    MarkdownText(raw: r.body)
+                        .font(.callout)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .textSelection(.enabled)
+                }
+            }
+            .padding(8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(style.color.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
+        case .comment(let c):
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    Image(systemName: "text.bubble")
+                        .foregroundStyle(.secondary)
+                        .font(.caption)
+                    Text(c.isFromViewer ? "You" : "@\(c.author)")
+                        .font(.caption.bold())
+                    Text("commented")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    if let d = c.createdAt {
+                        Text("· \(d.formatted(.relative(presentation: .named)))")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                }
+                MarkdownText(raw: c.body)
+                    .font(.callout)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+            }
+            .padding(8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 6))
         }
     }
 
@@ -737,14 +940,20 @@ struct PRDetailView: View {
     /// `Divider` mirrors the inline divider the section had before
     /// pinning so it doesn't visually fuse with the AI section above.
     @ViewBuilder
-    private var stickyActionHeader: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Divider()
-            actionsSection
-                .padding(.vertical, 8)
-            Divider()
-        }
-        .background(.background)
+    /// The review actions, framed as a subtle inset card so they stand
+    /// out from the surrounding sections without a full-width background
+    /// band. No longer a pinned/sticky header — the reviews section
+    /// collapses by default, so the actions already sit high in the view,
+    /// and inline placement sidesteps the "scrolled content bleeds through
+    /// a translucent pinned header" problem the band was there to solve.
+    private var actionsCard: some View {
+        actionsSection
+            .padding(12)
+            .background(.quinary, in: RoundedRectangle(cornerRadius: 10))
+            .overlay(
+                RoundedRectangle(cornerRadius: 10)
+                    .strokeBorder(.quaternary, lineWidth: 1)
+            )
     }
 
     /// Action surface, sits directly under the AI verdict + summary +
