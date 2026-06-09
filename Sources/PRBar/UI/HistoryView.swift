@@ -117,7 +117,7 @@ private struct HistoryRow: View {
                         }
                         Text("·")
                             .foregroundStyle(.tertiary)
-                        Text("\(entry.nameWithOwner) #\(entry.prNumber)")
+                        Text(verbatim: "\(entry.nameWithOwner) #\(entry.prNumber)")
                             .font(.callout)
                             .foregroundStyle(.secondary)
                     }

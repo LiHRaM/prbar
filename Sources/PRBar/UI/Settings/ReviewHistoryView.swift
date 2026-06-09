@@ -236,7 +236,7 @@ private struct EntryRow: View {
                             Text(entry.prTitle)
                                 .lineLimit(1)
                                 .truncationMode(.tail)
-                            Text("#\(entry.prNumber)")
+                            Text(verbatim: "#\(entry.prNumber)")
                                 .foregroundStyle(.secondary)
                         }
                         HStack(spacing: 8) {

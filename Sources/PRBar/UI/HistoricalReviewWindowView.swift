@@ -164,7 +164,7 @@ struct HistoricalReviewWindowView: View {
                 .truncationMode(.tail)
                 .textSelection(.enabled)
             HStack(spacing: 6) {
-                Text("\(entry.nameWithOwner) #\(entry.prNumber)")
+                Text(verbatim: "\(entry.nameWithOwner) #\(entry.prNumber)")
                     .font(.system(.caption, design: .monospaced))
                     .foregroundStyle(.secondary)
                 Text("·").foregroundStyle(.secondary)
