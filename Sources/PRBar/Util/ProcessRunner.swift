@@ -97,7 +97,7 @@ enum ProcessRunner {
             proc.executableURL = URL(fileURLWithPath: executable)
             proc.arguments = args
             if let cwd { proc.currentDirectoryURL = cwd }
-            if let environment { proc.environment = environment }
+            proc.environment = childEnvironment(environment)
 
             let outPipe = Pipe()
             let errPipe = Pipe()
@@ -184,6 +184,27 @@ enum ProcessRunner {
         case kill
     }
 
+    /// Build the child's environment with `ExecutableResolver.searchPaths`
+    /// prepended to PATH. A `.app` launched from Finder/`open` inherits the
+    /// minimal GUI PATH (`/usr/bin:/bin:/usr/sbin:/sbin`), which omits
+    /// `/opt/homebrew/bin`. We resolve CLIs like `codex` to an absolute path
+    /// ourselves, but `codex` is a `#!/usr/bin/env node` script — its shebang
+    /// then can't find `node` and the child exits 127. Seeding PATH with the
+    /// same dirs `ExecutableResolver` searches lets node (and any tools the
+    /// CLI shells out to) resolve. Caller-supplied `environment` is augmented
+    /// the same way rather than replaced wholesale.
+    static func childEnvironment(_ override: [String: String]?) -> [String: String] {
+        var env = override ?? ProcessInfo.processInfo.environment
+        let existing = (env["PATH"] ?? "").split(separator: ":").map(String.init)
+        var seen = Set<String>()
+        var ordered: [String] = []
+        for dir in ExecutableResolver.searchPaths + existing where seen.insert(dir).inserted {
+            ordered.append(dir)
+        }
+        env["PATH"] = ordered.joined(separator: ":")
+        return env
+    }
+
     /// Runs an external process and captures its full stdout + stderr.
     ///
     /// Implementation note: we route stdout/stderr through temp files rather
@@ -221,7 +242,7 @@ enum ProcessRunner {
             proc.executableURL = URL(fileURLWithPath: executable)
             proc.arguments = args
             if let cwd { proc.currentDirectoryURL = cwd }
-            if let environment { proc.environment = environment }
+            proc.environment = childEnvironment(environment)
             proc.standardOutput = outHandle
             proc.standardError = errHandle
 
