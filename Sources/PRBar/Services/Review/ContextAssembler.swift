@@ -107,30 +107,70 @@ enum ContextAssembler {
             out += "\n"
         }
         if toolMode == .sandboxed {
-            out += exploreSection(baseSha: baseSha, subpath: subdiff.subpath)
+            out += exploreSection(baseSha: baseSha, subdiff: subdiff)
         } else {
             out += diffSection(diffText)
         }
         return out
     }
 
+    /// Above this many bytes of changed-line content in a single subreview,
+    /// the explore prompt switches from "diff it all in one command" to
+    /// "triage from the file list, pull per-file diffs for what matters".
+    /// A single `git diff <base> HEAD` on a large change dumps the whole
+    /// blob into context in one tool call — the worst case for token spend
+    /// and the cost cap. For small changes one diff is cheaper than several
+    /// scoped calls, so we only nudge file-list-first when it pays off.
+    static let largeDiffThresholdBytes = 30_000
+
+    /// Approximate byte size of a subdiff's changed-line content. Sums the
+    /// content of every diff line across the subdiff's hunks — a stand-in
+    /// for how big the `git diff` output the agent would pull is.
+    static func subdiffContentBytes(_ subdiff: Subdiff) -> Int {
+        var total = 0
+        for h in subdiff.hunks {
+            for line in h.lines {
+                total += line.content.utf8.count + 1
+            }
+        }
+        return total
+    }
+
     /// Replaces the inline diff in `.sandboxed` mode. The PR head is
     /// checked out in the worktree (cwd) and the agent has git + read
     /// tools, so it inspects the change itself rather than reading a
-    /// multi-thousand-line blob from the prompt.
-    private static func exploreSection(baseSha: String, subpath: String) -> String {
+    /// multi-thousand-line blob from the prompt. For large changes the
+    /// guidance leads with file-list triage instead of a full diff so the
+    /// agent's spend scales with attention, not diff size.
+    private static func exploreSection(baseSha: String, subdiff: Subdiff) -> String {
+        let subpath = subdiff.subpath
+        let scope = subpath.isEmpty ? "" : " -- ."
         var s = "## Reviewing the change\n\n"
         s += "The PR head is checked out in your working directory "
         s += subpath.isEmpty ? "(repo root)" : "(`\(subpath)`)"
         s += ". The diff is **not** inlined — inspect it yourself with git:\n\n"
-        if !baseSha.isEmpty {
-            s += "- Full change: `git diff \(baseSha) HEAD`"
-            s += subpath.isEmpty ? "\n" : " — scope to this folder with a trailing `-- .`\n"
-            s += "- One file: `git diff \(baseSha) HEAD -- <path>`; the base version of a file is `git show \(baseSha):<path>`\n"
-        } else {
+
+        guard !baseSha.isEmpty else {
             s += "- Change: `git diff HEAD~1 HEAD` (base SHA was unavailable)\n"
+            s += "- Read or grep any file at head directly for surrounding context.\n"
+            s += "- There is no network access and nothing to fix — review only; everything you need is local.\n\n"
+            s += "The changed files are listed above; review only the PR's changes.\n"
+            return s
         }
-        s += "- Read or grep any file at head directly for surrounding context.\n"
+
+        let isLarge = subdiffContentBytes(subdiff) > largeDiffThresholdBytes
+        if isLarge {
+            s += "This is a **large change** (\(subdiff.filePaths.count) files). "
+            s += "**Do not** run a single `git diff` over everything — that floods your context and burns the budget. Instead:\n\n"
+            s += "- Start from the **Files changed** list above. Pick the highest-risk files first (logic, security, concurrency, data handling) and skim trivial ones (generated code, lockfiles, docs).\n"
+            s += "- Diff one file at a time: `git diff \(baseSha) HEAD -- <path>`. Base version of a file: `git show \(baseSha):<path>`.\n"
+            s += "- Read or grep only the surrounding code you need to judge a specific change.\n"
+            s += "- Emit your verdict as soon as you can judge the change — you do not need to open every file. If the important files are clean, that is an approve.\n"
+        } else {
+            s += "- Full change: `git diff \(baseSha) HEAD\(scope)`\n"
+            s += "- One file: `git diff \(baseSha) HEAD -- <path>`; the base version of a file is `git show \(baseSha):<path>`\n"
+            s += "- Read or grep any file at head directly for surrounding context.\n"
+        }
         s += "- There is no network access and nothing to fix — review only; everything you need is local.\n\n"
         s += "The changed files are listed above; review only the PR's changes.\n"
         return s

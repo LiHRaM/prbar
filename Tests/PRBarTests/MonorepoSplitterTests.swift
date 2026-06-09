@@ -184,6 +184,20 @@ final class MonorepoSplitterTests: XCTestCase {
         XCTAssertEqual(subs[0].subpath, "")
     }
 
+    func testSandboxedModeSkipsCollapse() {
+        // Same sprawling PR + collapse threshold that would normally fold to
+        // one root, but in sandboxed mode splitting is the cost control —
+        // collapse must be skipped so each subtree stays under its own cap.
+        let diff = makeMultiKernelDiff(filesPerKernel: [
+            "kernel-a": 2, "kernel-b": 2, "kernel-c": 2,
+        ])
+        var cfg = kernelLibConfig
+        cfg.collapseAboveSubreviewCount = 2
+        cfg.maxParallelSubreviews = 8
+        let subs = MonorepoSplitter.split(diffText: diff, config: cfg, toolMode: .sandboxed)
+        XCTAssertGreaterThanOrEqual(subs.count, 3)
+    }
+
     func testCollapseBelowThresholdLeavesSplitAlone() {
         let diff = makeMultiKernelDiff(filesPerKernel: [
             "kernel-a": 2, "kernel-b": 2,

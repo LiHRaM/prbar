@@ -142,6 +142,34 @@ final class ContextAssemblerTests: XCTestCase {
         XCTAssertTrue(bundle.userPrompt.contains("Files changed"))
     }
 
+    func testSandboxedLargeChangeLeadsWithFileListNotFullDiff() throws {
+        // Build a subdiff whose changed-line content exceeds the large-diff
+        // threshold so the explore prompt switches to file-list-first.
+        let bigLine = String(repeating: "x", count: 200)
+        var hunks: [Hunk] = []
+        for i in 0..<200 {
+            hunks.append(Hunk(
+                filePath: "pkg/file\(i).go", oldStart: 1, oldCount: 0, newStart: 1, newCount: 1,
+                lines: [.added(bigLine)]
+            ))
+        }
+        let big = Subdiff(subpath: "", hunks: hunks)
+        XCTAssertGreaterThan(ContextAssembler.subdiffContentBytes(big), ContextAssembler.largeDiffThresholdBytes)
+        let bundle = try ContextAssembler.assemble(
+            pr: makePR(),
+            subdiff: big,
+            diffText: "<unused in sandboxed>",
+            toolMode: .sandboxed,
+            workdir: URL(fileURLWithPath: "/tmp"),
+            baseSha: "abc123base"
+        )
+        // Large change: no "Full change" single-diff invitation; per-file
+        // diff guidance instead.
+        XCTAssertFalse(bundle.userPrompt.contains("Full change"))
+        XCTAssertTrue(bundle.userPrompt.contains("large change"))
+        XCTAssertTrue(bundle.userPrompt.contains("git diff abc123base HEAD -- <path>"))
+    }
+
     func testLanguageOverrideAppliedToSystemPrompt() throws {
         let goSubdiff = Subdiff(
             subpath: "kernel-billing",

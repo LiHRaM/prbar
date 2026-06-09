@@ -591,7 +591,7 @@ final class ReviewQueueWorker {
             // read-only`. Both explore the worktree with git instead of an
             // inlined diff. Falls back to `.none` only when no checkout can
             // be provisioned (handled below).
-            let subdiffs = MonorepoSplitter.split(diffText: diffText, config: config)
+            let subdiffs = MonorepoSplitter.split(diffText: diffText, config: config, toolMode: effectiveToolMode)
             guard !subdiffs.isEmpty else {
                 PRBarLog.triage.notice("run abort reason=empty-diff pr=\(pr.nameWithOwner, privacy: .public)#\(pr.number, privacy: .public)")
                 let msg = "Empty diff — nothing to review."

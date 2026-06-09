@@ -19,13 +19,14 @@ import Foundation
 enum MonorepoSplitter {
     static func split(
         diffText: String,
-        config: RepoConfig = .default
+        config: RepoConfig = .default,
+        toolMode: ToolMode? = nil
     ) -> [Subdiff] {
         let hunks = DiffParser.parse(diffText)
-        return split(hunks: hunks, config: config)
+        return split(hunks: hunks, config: config, toolMode: toolMode)
     }
 
-    static func split(hunks: [Hunk], config: RepoConfig) -> [Subdiff] {
+    static func split(hunks: [Hunk], config: RepoConfig, toolMode: ToolMode? = nil) -> [Subdiff] {
         if hunks.isEmpty { return [] }
         if config.excluded { return [] }
 
@@ -120,6 +121,17 @@ enum MonorepoSplitter {
         // `collapseAboveSubreviewCount` subreviews, fold them into a single
         // root review. The PR is too sprawling for per-subfolder breakdown
         // to be useful (cost balloons, summaries get noisy).
+        //
+        // This heuristic was written for inline-diff modes, where many
+        // subreviews each re-inline a big diff. In `.sandboxed` mode the
+        // logic inverts: each subreview explores only its own subtree under
+        // its own cost cap, so splitting is the cost *control*. Collapsing a
+        // sprawling PR back to a single root review forces the whole change
+        // through one agent under one cap — exactly the budget blow-up we
+        // want to avoid. So skip collapse when reviewing sandboxed.
+        if toolMode == .sandboxed {
+            return subdiffs
+        }
         if let cap = config.collapseAboveSubreviewCount, subdiffs.count > cap {
             let allHunks = subdiffs.flatMap(\.hunks)
             return [Subdiff(subpath: "", hunks: allHunks)]
