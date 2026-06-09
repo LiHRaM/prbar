@@ -483,6 +483,19 @@ final class ReviewQueueWorker {
                 PRBarLog.triage.debug("auto-enqueue skip reason=already-reviewed-by-others pr=\(pr.nameWithOwner, privacy: .public)#\(pr.number, privacy: .public) decision=\(pr.reviewDecision ?? "nil", privacy: .public)")
                 continue
             }
+            // A review that already failed at this exact commit is not
+            // auto-retried — re-running on the next poll either burns cost
+            // re-failing deterministically (budgetExceeded on a too-large
+            // diff) or churns the UI for transient failures, and it masks
+            // the failed state as the row flips back to "Reviewing…". Any
+            // failure is terminal for this SHA; a new commit re-arms it and
+            // manual Re-run (force) bypasses this.
+            if let existing = reviews[pr.nodeId],
+               case .failed = existing.status,
+               existing.headSha == pr.headSha {
+                PRBarLog.triage.debug("auto-enqueue skip reason=failed-at-current-sha pr=\(pr.nameWithOwner, privacy: .public)#\(pr.number, privacy: .public) sha=\(self.short(pr.headSha), privacy: .public)")
+                continue
+            }
             enqueue(pr)
         }
     }

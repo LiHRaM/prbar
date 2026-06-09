@@ -60,6 +60,18 @@ struct PRDetailView: View {
     /// same annotation can be re-clicked to re-jump.
     @State private var focusedDiffKey: String? = nil
 
+    /// Per-PR opt-in to render a diff above `maxInlineDiffLines` inline.
+    /// Huge diffs are collapsed to a "view on GitHub" card by default
+    /// because DiffView builds every line eagerly inside the scroll
+    /// container, and a multi-thousand-line diff churns CALayers badly
+    /// during scroll (the popover goes sluggish and rows visibly
+    /// unload/reload). Reset on PR switch.
+    @State private var forceRenderLargeDiff = false
+
+    /// Above this many total diff lines the inline render is replaced by
+    /// a GitHub link unless the user clicks "Render anyway".
+    private static let maxInlineDiffLines = 1500
+
     private var review: AggregatedReview? {
         if case .completed(let agg) = queue.reviews[pr.nodeId]?.status {
             return agg
@@ -196,6 +208,7 @@ struct PRDetailView: View {
             bodyDraftSeededForSha = nil
             includeAISummaryOverride = nil
             reviewsExpanded = false
+            forceRenderLargeDiff = false
             seedBodyDraftFromAIIfNeeded()
         }
         .onChange(of: review?.summaryMarkdown ?? "") { _, _ in
@@ -691,41 +704,19 @@ struct PRDetailView: View {
                 ProgressView().controlSize(.small)
                 Text(label).font(.caption).foregroundStyle(.secondary)
             }
-            if let progress = queue.liveProgress[pr.nodeId] {
-                liveProgressView(progress)
-            }
+            // Reads `liveProgress` from inside its own `View` struct so
+            // SwiftUI's @Observable dependency tracking scopes the
+            // high-frequency progress updates to *that* subtree. Reading
+            // it here (in PRDetailView.body) would make every ~100ms-1s
+            // progress event invalidate the whole detail view and force a
+            // full re-layout of the expensive diff section. Same spirit as
+            // keeping the action bar out of the scrolling container.
+            LiveReviewProgressView(nodeId: pr.nodeId)
             if let prior = priorReview {
                 priorReviewBanner(prior)
                 completedReviewSection(prior.aggregated)
             }
         }
-    }
-
-    @ViewBuilder
-    private func liveProgressView(_ progress: ReviewProgress) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 8) {
-                if progress.toolCallCount > 0 {
-                    Label("\(progress.toolCallCount) tool\(progress.toolCallCount == 1 ? "" : "s")",
-                          systemImage: "wrench.and.screwdriver")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .help("Tools used so far: \(progress.toolNamesUsed.joined(separator: ", "))")
-                }
-                if let cost = progress.costUsdSoFar {
-                    Text(String(format: "$%.4f", cost))
-                        .font(.system(.caption2, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                }
-                if let last = progress.toolNamesUsed.last {
-                    Text("· running `\(last)`")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-            }
-        }
-        .padding(8)
-        .background(Color.blue.opacity(0.06), in: RoundedRectangle(cornerRadius: 6))
     }
 
     @ViewBuilder
@@ -897,14 +888,58 @@ struct PRDetailView: View {
                     .foregroundStyle(.red)
                     .lineLimit(3)
             case .loaded(let hunks):
-                DiffView(
-                    hunks: hunks,
-                    annotations: review?.annotations ?? [],
-                    subpaths: subpathsFromReview(),
-                    focusedKey: $focusedDiffKey
-                )
+                let lineCount = hunks.reduce(0) { $0 + $1.lines.count }
+                if lineCount > Self.maxInlineDiffLines && !forceRenderLargeDiff {
+                    largeDiffPlaceholder(
+                        lineCount: lineCount,
+                        fileCount: Set(hunks.map(\.filePath)).count
+                    )
+                } else {
+                    DiffView(
+                        hunks: hunks,
+                        annotations: review?.annotations ?? [],
+                        subpaths: subpathsFromReview(),
+                        focusedKey: $focusedDiffKey
+                    )
+                }
             }
         }
+    }
+
+    /// Shown in place of a multi-thousand-line inline diff. Rendering one
+    /// inline makes the popover scroll unusably slow (DiffView builds every
+    /// line eagerly and the CALayer tree churns during scroll), so we link
+    /// out to GitHub's files view by default and let the user opt in.
+    @ViewBuilder
+    private func largeDiffPlaceholder(lineCount: Int, fileCount: Int) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: "doc.text.magnifyingglass")
+                    .foregroundStyle(.secondary)
+                Text("Large diff — \(lineCount) lines across \(fileCount) file\(fileCount == 1 ? "" : "s")")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Text("Rendering this inline makes the popover sluggish, so it's collapsed by default.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 8) {
+                Button {
+                    NSWorkspace.shared.open(pr.url.appendingPathComponent("files"))
+                } label: {
+                    Label("View diff on GitHub", systemImage: "arrow.up.forward.square")
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                Button("Render anyway") { forceRenderLargeDiff = true }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+            }
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
     }
 
     /// Floating button bottom-right of the detail scroller. Always
@@ -1369,6 +1404,48 @@ struct PRDetailView: View {
         case .comment:        return ("Approve with notes", .blue)
         case .requestChanges: return ("Request changes", .red)
         case .abstain:        return ("Abstain", .gray)
+        }
+    }
+}
+
+/// Live AI-review progress chip (tool count / cost / running tool).
+///
+/// Deliberately a standalone `View` rather than a `@ViewBuilder` method on
+/// `PRDetailView`: helper methods are inlined into the parent's `body`
+/// observation scope, so reading the high-frequency `liveProgress`
+/// dictionary there would re-evaluate the entire detail view — and
+/// re-layout the expensive diff section — on every progress event (several
+/// per second on a large diff). Owning the `liveProgress` read here scopes
+/// the invalidation to this small subtree.
+private struct LiveReviewProgressView: View {
+    @Environment(ReviewQueueWorker.self) private var queue
+    let nodeId: String
+
+    var body: some View {
+        if let progress = queue.liveProgress[nodeId] {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 8) {
+                    if progress.toolCallCount > 0 {
+                        Label("\(progress.toolCallCount) tool\(progress.toolCallCount == 1 ? "" : "s")",
+                              systemImage: "wrench.and.screwdriver")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .help("Tools used so far: \(progress.toolNamesUsed.joined(separator: ", "))")
+                    }
+                    if let cost = progress.costUsdSoFar {
+                        Text(String(format: "$%.4f", cost))
+                            .font(.system(.caption2, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                    }
+                    if let last = progress.toolNamesUsed.last {
+                        Text("· running `\(last)`")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .padding(8)
+            .background(Color.blue.opacity(0.06), in: RoundedRectangle(cornerRadius: 6))
         }
     }
 }
