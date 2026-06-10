@@ -98,6 +98,11 @@ struct InboxPR: Identifiable, Sendable, Hashable, Codable {
     let hasAutoMerge: Bool
     let autoMergeEnabledBy: String?
 
+    /// The merge strategy a pending auto-merge will use, when one is enabled
+    /// (`autoMergeRequest.mergeMethod`). Defaulted so test constructors and
+    /// pre-existing cached payloads don't have to supply it.
+    var autoMergeMethod: MergeMethod? = nil
+
     let allCheckSummaries: [CheckSummary]
 
     /// Human reviews on this PR, oldest-first (GraphQL `reviews(last:)`
@@ -141,6 +146,31 @@ struct InboxPR: Identifiable, Sendable, Hashable, Codable {
             && (role == .authored || role == .both)
     }
 
+    /// Human-readable reason this PR can't be merged right now, or nil when
+    /// it's click-to-merge ready. Drives the merge action card's status line
+    /// and explains why the immediate-merge button is disabled. Ordered most-
+    /// blocking first so the single surfaced reason is the actionable one.
+    var mergeBlockReason: String? {
+        if isReadyToMerge { return nil }
+        if isDraft { return "Draft — mark ready for review to merge" }
+        if allowedMergeMethods.isEmpty { return "No merge method enabled for this repo" }
+        switch reviewDecision {
+        case "CHANGES_REQUESTED": return "Changes requested"
+        case "REVIEW_REQUIRED": return "Review required"
+        default: break
+        }
+        if mergeable == "CONFLICTING" || mergeStateStatus == "DIRTY" || mergeStateStatus == "CONFLICTING" {
+            return "Merge conflicts — rebase needed"
+        }
+        switch checkRollupState {
+        case "FAILURE", "ERROR": return "Checks failing"
+        case "PENDING", "EXPECTED", "QUEUED", "IN_PROGRESS": return "Checks pending"
+        default: break
+        }
+        if mergeStateStatus == "BLOCKED" { return "Blocked by branch protection" }
+        return "Not mergeable yet (\(mergeStateStatus))"
+    }
+
     /// The viewer's most recent submitted review, if they've reviewed
     /// this PR at all. Drives the "you already reviewed" indicator.
     var myLastReview: PRReviewSummary? {
@@ -164,7 +194,7 @@ extension InboxPR {
         case headRef, baseRef, headSha, isDraft, role
         case mergeable, mergeStateStatus, reviewDecision, checkRollupState
         case totalAdditions, totalDeletions, changedFiles
-        case hasAutoMerge, autoMergeEnabledBy, allCheckSummaries
+        case hasAutoMerge, autoMergeEnabledBy, autoMergeMethod, allCheckSummaries
         case allowedMergeMethods, autoMergeAllowed, deleteBranchOnMerge
         case humanReviews, issueComments
     }
@@ -198,6 +228,7 @@ extension InboxPR {
         self.changedFiles = try c.decode(Int.self, forKey: .changedFiles)
         self.hasAutoMerge = try c.decode(Bool.self, forKey: .hasAutoMerge)
         self.autoMergeEnabledBy = try c.decodeIfPresent(String.self, forKey: .autoMergeEnabledBy)
+        self.autoMergeMethod = try c.decodeIfPresent(MergeMethod.self, forKey: .autoMergeMethod)
         self.allCheckSummaries = try c.decode([CheckSummary].self, forKey: .allCheckSummaries)
         self.allowedMergeMethods = try c.decode(Set<MergeMethod>.self, forKey: .allowedMergeMethods)
         self.autoMergeAllowed = try c.decode(Bool.self, forKey: .autoMergeAllowed)
@@ -230,6 +261,8 @@ extension InboxPR {
         self.changedFiles = node.changedFiles
         self.hasAutoMerge = node.autoMergeRequest != nil
         self.autoMergeEnabledBy = node.autoMergeRequest?.enabledBy?.login
+        self.autoMergeMethod = node.autoMergeRequest?.mergeMethod
+            .flatMap { MergeMethod(rawValue: $0.lowercased()) }
 
         var methods: Set<MergeMethod> = []
         if node.repository.squashMergeAllowed { methods.insert(.squash) }
