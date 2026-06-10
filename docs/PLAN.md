@@ -37,7 +37,7 @@ The AI review pipeline works end to end in both `.none` (pure-prompt, default) a
 - **Drafts skipped by default** (`RepoConfig.reviewDrafts`, opt-in per repo). Manual Re-run still works.
 - **About tab**: app icon, version, copyright, authors row crediting Łukasz Stefaniak + Claude Code Opus, links to `@lustefaniak` and the source repo.
 - **Versioning derived from git** (`bin/version`): `marketing` reads the latest tag (sans `v`, validated semver-shape), `build` reads `git rev-list --count HEAD` (monotonic), `describe` powers the DMG filename. `bin/build` and `bin/release-dmg` pass these to `xcodebuild` so `Info.plist` is honest. About tab reflects them at runtime.
-- **Universal DMG release pipeline** (`bin/release-dmg` + `.github/workflows/release.yml`): builds an arm64+x86_64 archive, sanity-checks both slices via `lipo`, packages a UDZO DMG with an `/Applications` symlink, uploads as workflow artifact + publishes a GitHub Release on tag pushes. Pinned to `Xcode_16.0`. App is ad-hoc signed today (notarization is a follow-up).
+- **Universal DMG release pipeline** (`bin/release-dmg` + `.github/workflows/release.yml`): builds an arm64+x86_64 archive, sanity-checks both slices via `lipo`, packages a UDZO DMG with an `/Applications` symlink, uploads as workflow artifact + publishes a GitHub Release on tag pushes. Pinned to `Xcode_16.0`. Developer ID signed + Apple-notarized + stapled in the release path (env-driven; ad-hoc fallback when `DEVELOPMENT_TEAM` is absent).
 - **Review-readiness coordinator** (`ReadinessCoordinator`): owns the "ready for human review" signal. Per-repo `NotifyPolicy` — `.batchSettled` (default) holds notifications until every in-flight AI triage settles, then fires one grouped banner; `.eachReady` keeps the old per-PR behaviour. Per-repo `aiReviewEnabled` toggle — when false the worker skips auto-enqueue and the PR enters "ready" instantly, riding the same batch as AI-triaged PRs from other repos. Replaces the per-poll `.newReviewRequest` emission from `EventDeriver`; author-side events (ready-to-merge, CI failures) still flow through there.
 - **Sequential focus mode** (`PopoverView.advanceOrClose`, `@AppStorage("sequentialFocusMode")`, default on): after Approve/Comment/Request-changes, the detail pane jumps to the next ready review-requested PR instead of returning to the list. Skips drafts, already-approved PRs, and PRs whose AI triage is still running. Toggleable in General Settings.
 - **Prior-review retriage** (`ReviewState.priorReview`, `PriorReview` struct, `ContextAssembler.priorReview`): when the PR's head moves, the prior `AggregatedReview` is captured on the new entry. The detail view keeps showing the previous verdict + annotations (with an orange retriage banner) while the new run executes. The new prompt gains a "Previous review" section with prior verdict, summary, and blocking annotations so the AI is framed as "did the new commits address prior concerns?" — successful retriage clears the prior; a failure keeps it so the user doesn't lose their last good triage.
@@ -65,25 +65,11 @@ The AI review pipeline works end to end in both `.none` (pure-prompt, default) a
 - **Standalone full-size detail window** (`PRDetailWindowView`, `WindowGroup(id: PRDetailWindowID.id, for: String.self)`): pop a PR out of the 560×640 popover into a 1100×800 resizable window for comfortable reading of large diffs and long annotations. Multiple windows can be open at once (one per `nodeId`). Resolves the PR live against `PRPoller.prs` so the window stays in sync as polls land. Opening from the popover dismisses the popover so the user lands focused on the new window. Same pattern for the gear / Settings button — also dismisses the popover before opening Settings.
 - **Marketing screenshot pipeline** (`bin/screenshots`, `ScreenshotMode`, `ScreenshotFixtures`, `AppDelegate.bootstrapScreenshotStage`): seven stages (`popover-my-prs`, `popover-inbox`, `popover-detail`, `window-detail`, `settings-{general,repositories,diagnostics}`) each launch a fresh app process against fixture data with no `gh` / network involvement and no notification auth prompt. App writes its content window's `windowNumber` to `/tmp/prbar-screenshot-window-id.txt` so the bash driver can `screencapture -l<id>` exactly that window — no AppleScript, no Accessibility prompts. Output → `docs/screenshots/`, rendered inline by `README.md`. The earlier `screenshotMode: Bool` opt-in across `PRDetailView` / `PRRowView` / `PRListView` / `RepoConfigEditor` (which swapped `ScrollView`→`VStack` and `Menu`→`Button` to work around `ImageRenderer`'s NSControl placeholder problem) is gone — that path produced not-real-looking output and is replaced wholesale.
 
-### Still to do — ranked by value
+### Still to do
 
-**High value, low effort:**
-1. ~~**Marketing screenshots**~~ — shipped. `bin/screenshots` drives the real app against `ScreenshotFixtures` (no `gh`, no network) one stage per launch, captures via `screencapture -l<windowID>` against the windowNumber the app writes to `/tmp/prbar-screenshot-window-id.txt`. Stages: `popover-my-prs`, `popover-inbox`, `popover-detail`, `window-detail`, `settings-{general,repositories,diagnostics}`. The `screenshotMode: Bool` opt-in across `PRDetailView` / `PRRowView` / `PRListView` / `RepoConfigEditor` is gone — it was producing not-real-looking output (ImageRenderer can't render NSControl-backed widgets, ScrollView clips, etc.). Output → `docs/screenshots/` (committed; rendered inline by `README.md`).
-2. **Provider judge / multi-AI** — only worth it if real workload shows single-`claude` review missing things often enough to justify 2× cost + latency. Not a near-term default.
+The open backlog now lives in **[GitHub Issues](https://github.com/lustefaniak/prbar/issues)** (validated against the implementation 2026-06-10 — screenshots, the standalone detail window, DMG notarization, and sparse-by-subpath checkout all shipped and were removed from this list). Currently filed: auto-approve undo notification (#16), sparse-checkout secret-file excludes (#17), automatic bare-clone eviction (#18), branch-protection required-checks filtering (#19), delta-diff on retriage (#20), pure-prompt `.none` CLAUDE.md inlining (#21), cost-dashboard rollups (#22).
 
-**Polish + safety:**
-4. **Auto-approve as a real notification banner** — the `merge_ready` / `reviews_ready` / `ci_alert` categories now register actions and route taps via `NotificationActionRouter` (Merge all → `PRPoller.mergePR`, Open → `NSWorkspace.open`). Still open: surface the auto-approve undo window as a UNUserNotification too — today it's popover-only — with an `Undo` action wired to `ReviewQueueWorker.cancelAutoApproveBatch`.
-5. ~~**Bigger PR detail window**~~ — shipped. `WindowGroup(id: PRDetailWindowID.id, for: String.self)` keyed by PR `nodeId`; opened from the popover via the `macwindow.on.rectangle` button in `PRDetailView.navHeader`. Default size 1100×800, min 800×600. PR resolved live against `PRPoller.prs` so the window stays in sync as polls land; falls back to a "no longer in inbox" empty state when the PR drops out.
-6. **Codex per-subfolder + multi-judge** — `CodexProvider` ships and `RepoConfig.providerOverride` already lets you pick claude or codex per repo. Still open: per-subfolder provider routing + multi-judge aggregation. *Skip* until real workload shows single-provider is missing things; multi-judge doubles cost for a maybe-improvement.
-7. **Sparse-checkout** — `RepoCheckoutManager` checks out the full SHA today; sparse-by-subpath shrinks worktree disk use and lines up with the per-PR exclude list (`.env*` / `*.pem`).
-8. **Bare-clone LRU eviction** — manual Prune button shipped; automatic 5 GB cap not yet wired.
-9. **Branch-protection cache** — no `BranchProtectionCache.swift` yet; the inbox query drops `CheckRun.isRequired` because of a `gh` quirk, so the "required-only" filtering called for in the spec is missing.
-10. **DMG notarization** — Developer ID cert + AC API key + `xcrun notarytool` step in the release workflow. Removes the right-click-Open Gatekeeper warning on first launch for non-technical users.
-11. **Delta-diff fetch on retriage** — prior-verdict prompt context is in (see Prior-review retriage above). Still open: fetch `gh api repos/{o}/{r}/compare/{old}...{new}` and feed *only the delta diff* to the AI when retriaging. Cost win, not a quality win.
-
-**Phase 5 / 7 remnants:**
-12. **Pure-prompt mode polish** — in `.none` mode, the assembler doesn't inline `<subpath>/CLAUDE.md` (capped at 8 KB) the way the spec called for. Important for repos where you've turned off code exploration but still want the per-subfolder voice.
-13. **Cost dashboard** — sum of `costUsd` per day/week broken out by repo / tool-mode. With `ActionLogEntry.costUsd` already populated for auto-approves, this is now a query + chart on top of the existing SwiftData store. Lower priority on a subscription (cost is informational anyway).
+**Deferred by choice (not filed):** multi-AI provider judging and per-subfolder provider routing. Both are confirmed single-provider-only today; they roughly double cost for a maybe-improvement, so they wait until real workload shows single-provider misses things often enough to justify it. File them then.
 
 Notable divergences from the original spec, tracked here so they don't get lost:
 
@@ -770,7 +756,7 @@ Six sections planned, two shipped:
 - **Subprocess** *(shipped)*: Foundation `Process` + temp-file redirection (avoids 64 KB Pipe-buffer deadlock). Migration to `swift-subprocess` is a follow-up.
 - **Storage** *(shipped)*: SwiftData store at `~/Library/Application Support/io.synq.prbar/store.sqlite`. Inhabitants: `ActionLogEntry`, `ReviewStateEntry`, `RepoConfigEntry`, `InboxSnapshotEntry`, `DiffCacheEntry`, `FailureLogCacheEntry`. Each entry carries its domain object as a JSON-encoded payload alongside projected query columns (timestamps, sort indexes, unique cache keys), so the underlying structs can evolve without a SwiftData schema migration. Container construction lives in `Sources/PRBar/Persistence/PRBarModelContainer.swift`; an `inMemory()` factory backs unit tests.
 - **No third-party deps** in MVP.
-- **Distribution**: ad-hoc-signed local build for personal use; Developer ID + notarization later if shared. Not sandboxed (subprocess access required).
+- **Distribution**: Developer ID signed + Apple-notarized + stapled DMG on tagged releases (ad-hoc fallback for local builds without `DEVELOPMENT_TEAM`). Not sandboxed (subprocess access required).
 
 Project layout (current tree — see `tree Sources/PRBar` for an exact listing):
 
@@ -870,7 +856,7 @@ PRBar/
 - ✅ `ReviewQueueWorker` picks the matching `MonorepoConfig` per PR, applies its `toolModeOverride`, and uses its per-subreview `maxToolCalls`/`maxCostUsd` caps. Worktree is shared across same-SHA subreviews; each subreview's cwd is `<worktree>/<subpath>` so per-subfolder `CLAUDE.md` / `.mcp.json` resolves automatically.
 - ✅ `ResultAggregator` already worst-verdict + concat + annotation path-rewrite (Phase 2c).
 - ✅ `SubreviewBreakdownView` collapsible per-subfolder list shown in `PRDetailView` when `agg.perSubreview.count > 1`. Diff-view subpath chips activate at the same threshold.
-- ◌ Sparse-checkout per the splitter's identified subpaths is *not* yet enabled (`RepoCheckoutManager` checks out the full SHA today). Follow-up — small change but needs care around the per-PR exclude list.
+- ✅ Sparse-checkout per the splitter's identified subpaths (`RepoCheckoutManager.addWorktree` cone-sparse, used in `.sandboxed` mode). ◌ Still open: the per-PR secret-file exclude list (`.env*` / `*.pem` / `secrets/**`) — GH issue #17.
 - ◌ `MonorepoConfigsSettings` editor is still on the to-do list (configs ship as code-defined builtins for now).
 - **Demo gate met**: a PR touching `kernel-billing` + `lib/auth` in `getsynq/cloud` produces 2 subreviews sharing one worktree, with two separate verdicts aggregated to one outcome and per-subfolder breakdown visible in the UI.
 
@@ -893,7 +879,7 @@ PRBar/
 - Cost dashboard (sum of `costUsd` per day/week, broken out by provider/subreview/tool-mode).
 - ✅ Bare-clone disk usage view + manual Prune button (in Diagnostics).
 - ◌ Automatic LRU eviction at the 5 GB cap.
-- ◌ Sparse-checkout per the splitter's identified subpaths in `RepoCheckoutManager` — small, but tied to the per-PR exclude list (`.env*` etc.).
+- ✅ Sparse-checkout per the splitter's identified subpaths in `RepoCheckoutManager` (cone-sparse). ◌ Per-PR secret-file exclude list (`.env*` etc.) still open — GH issue #17.
 - Provider abstraction proven by stubbing `CodexProvider` (deferred until codex's headless contract is more mature).
 - Diagnostics panel.
 
