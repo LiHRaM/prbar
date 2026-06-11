@@ -51,13 +51,13 @@ final class RepoConfigFilterTests: XCTestCase {
         XCTAssertEqual(poller.prs.count, 1)
     }
 
-    // MARK: - alreadyReviewedByOthers helper
+    // MARK: - isReviewedByOthers predicate
 
-    func testAlreadyReviewedByOthers() {
-        XCTAssertTrue(ReviewQueueWorker.alreadyReviewedByOthers(makePR(reviewDecision: "APPROVED")))
-        XCTAssertTrue(ReviewQueueWorker.alreadyReviewedByOthers(makePR(reviewDecision: "CHANGES_REQUESTED")))
-        XCTAssertFalse(ReviewQueueWorker.alreadyReviewedByOthers(makePR(reviewDecision: "REVIEW_REQUIRED")))
-        XCTAssertFalse(ReviewQueueWorker.alreadyReviewedByOthers(makePR(reviewDecision: nil)))
+    func testIsReviewedByOthers() {
+        XCTAssertTrue(makePR(reviewDecision: "APPROVED").isReviewedByOthers)
+        XCTAssertTrue(makePR(reviewDecision: "CHANGES_REQUESTED").isReviewedByOthers)
+        XCTAssertFalse(makePR(reviewDecision: "REVIEW_REQUIRED").isReviewedByOthers)
+        XCTAssertFalse(makePR(reviewDecision: nil).isReviewedByOthers)
     }
 
     // MARK: - Forward-compat Codable

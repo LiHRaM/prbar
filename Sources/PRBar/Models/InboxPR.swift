@@ -181,6 +181,19 @@ struct InboxPR: Identifiable, Sendable, Hashable, Codable {
         humanReviews.last { $0.isFromViewer }
     }
 
+    /// True when the PR's aggregate `reviewDecision` is APPROVED or
+    /// CHANGES_REQUESTED. Because GitHub generally drops you from
+    /// requested-reviewers after you submit a review, a review-request still
+    /// surfaced in the Inbox with one of these decisions is one *someone else*
+    /// weighed in on — not one you reviewed. Shared by the Inbox "hide reviewed
+    /// by others" filter and the AI auto-enqueue skip so the two can't drift apart.
+    var isReviewedByOthers: Bool {
+        switch (reviewDecision ?? "").uppercased() {
+        case "APPROVED", "CHANGES_REQUESTED": return true
+        default: return false
+        }
+    }
+
     /// Default merge method for this PR — first allowed in the order
     /// most teams converge on. Used as the primary action of the row's
     /// split button when there's no per-repo "last used" override.

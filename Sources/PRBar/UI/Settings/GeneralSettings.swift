@@ -10,7 +10,7 @@ struct GeneralSettings: View {
     @AppStorage("badgeShowCIFailed")        private var badgeCIFailed        = true
     @AppStorage(MyDraftHandling.storageKey) private var draftHandlingRaw     =
         MyDraftHandling.default.rawValue
-    @AppStorage(InboxVisibility.hideReviewedKey) private var hideReviewedFromInbox = false
+    @AppStorage(InboxVisibility.hideReviewedByOthersKey) private var hideReviewedByOthersFromInbox = false
     @AppStorage("defaultProviderId")        private var defaultProviderRaw   = ProviderID.claude.rawValue
     @AppStorage("dailyCostCapEnabled")      private var costCapEnabled       = true
     @AppStorage("dailyCostCapUsd")          private var costCapUsd: Double   = 5.0
@@ -141,11 +141,11 @@ struct GeneralSettings: View {
             }
 
             Section {
-                Toggle("Hide already-reviewed PRs", isOn: $hideReviewedFromInbox)
+                Toggle("Hide PRs already reviewed by others", isOn: $hideReviewedByOthersFromInbox)
             } header: {
                 Text("Inbox")
             } footer: {
-                Text("When on, review requests you've already approved are removed from the Inbox list instead of sinking to the bottom. They never count toward the menu-bar badge either way.")
+                Text("When on, review requests another reviewer has already approved or requested changes on are removed from the Inbox list instead of sinking to the bottom. PRs still waiting on your review stay visible.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

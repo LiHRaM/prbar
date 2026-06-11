@@ -9,28 +9,22 @@ final class InboxVisibilityTests: XCTestCase {
             makePR(nodeId: "C", reviewDecision: "CHANGES_REQUESTED"),
             makePR(nodeId: "N", reviewDecision: nil),
         ]
-        let result = InboxVisibility.filter(prs, hideReviewed: false)
+        let result = InboxVisibility.filter(prs, hideReviewedByOthers: false)
         XCTAssertEqual(result.map(\.nodeId), ["A", "R", "C", "N"])
     }
 
-    func testFilterEnabledDropsOnlyApproved() {
+    func testFilterEnabledDropsReviewedByOthers() {
         let prs = [
             makePR(nodeId: "A", reviewDecision: "APPROVED"),
             makePR(nodeId: "R", reviewDecision: "REVIEW_REQUIRED"),
             makePR(nodeId: "C", reviewDecision: "CHANGES_REQUESTED"),
             makePR(nodeId: "N", reviewDecision: nil),
         ]
-        let result = InboxVisibility.filter(prs, hideReviewed: true)
-        // APPROVED is the only thing the badge excludes, so it's the only
-        // thing this filter hides — changes-requested / not-yet-reviewed /
-        // unknown all stay actionable.
-        XCTAssertEqual(result.map(\.nodeId), ["R", "C", "N"])
-    }
-
-    func testIsAlreadyReviewed() {
-        XCTAssertTrue(InboxVisibility.isAlreadyReviewed(makePR(nodeId: "A", reviewDecision: "APPROVED")))
-        XCTAssertFalse(InboxVisibility.isAlreadyReviewed(makePR(nodeId: "C", reviewDecision: "CHANGES_REQUESTED")))
-        XCTAssertFalse(InboxVisibility.isAlreadyReviewed(makePR(nodeId: "N", reviewDecision: nil)))
+        let result = InboxVisibility.filter(prs, hideReviewedByOthers: true)
+        // A PR another reviewer has already decided (APPROVED or
+        // CHANGES_REQUESTED) is dropped; not-yet-reviewed / unknown stay
+        // actionable because they're still waiting on you.
+        XCTAssertEqual(result.map(\.nodeId), ["R", "N"])
     }
 
     // MARK: helpers
