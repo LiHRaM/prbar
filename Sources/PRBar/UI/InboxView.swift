@@ -3,11 +3,13 @@ import SwiftUI
 struct InboxView: View {
     @Environment(PRPoller.self) private var poller
     @Environment(ActionQueue.self) private var actionQueue
+    @AppStorage(InboxVisibility.hideReviewedKey) private var hideReviewed = false
     let onSelect: (InboxPR) -> Void
 
     private var inboxPRs: [InboxPR] {
-        poller.prs
+        let roleFiltered = poller.prs
             .filter { $0.role == .reviewRequested || $0.role == .both }
+        return InboxVisibility.filter(roleFiltered, hideReviewed: hideReviewed)
             .sorted(by: Self.priority)
     }
 

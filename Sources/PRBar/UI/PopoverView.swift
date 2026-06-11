@@ -23,6 +23,7 @@ struct PopoverView: View {
     @AppStorage("sequentialFocusMode") private var sequentialFocusMode = true
     @AppStorage(MyDraftHandling.storageKey) private var myDraftHandlingRaw =
         MyDraftHandling.default.rawValue
+    @AppStorage(InboxVisibility.hideReviewedKey) private var hideReviewedFromInbox = false
     private let probedTools = ["gh", "claude", "codex", "git"]
 
     enum Tab: String, CaseIterable, Identifiable, Hashable {
@@ -48,7 +49,11 @@ struct PopoverView: View {
         }.count
     }
     private var inboxCount: Int {
-        poller.prs.filter { $0.role == .reviewRequested || $0.role == .both }.count
+        // Match what InboxView actually renders — when the user hides
+        // already-reviewed PRs from the list, those must not count towards
+        // the segmented-tab badge either, or the badge and list disagree.
+        let roleFiltered = poller.prs.filter { $0.role == .reviewRequested || $0.role == .both }
+        return InboxVisibility.filter(roleFiltered, hideReviewed: hideReviewedFromInbox).count
     }
 
     /// Effective popover height: the live drag value while resizing,
