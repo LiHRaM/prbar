@@ -2,6 +2,7 @@ import SwiftUI
 
 struct GeneralSettings: View {
     @Environment(ReviewQueueWorker.self) private var queue
+    @Environment(RepoConfigStore.self) private var repoConfigs
     @AppStorage("launchAtLogin") private var launchAtLogin = false
     @AppStorage("sequentialFocusMode") private var sequentialFocusMode = true
     @AppStorage("postIncludesAISummary") private var postIncludesAISummary = true
@@ -14,6 +15,8 @@ struct GeneralSettings: View {
     @AppStorage(MyPRsScope.storageKey)      private var myPRsScopeRaw        =
         MyPRsScope.default.rawValue
     @AppStorage("defaultProviderId")        private var defaultProviderRaw   = ProviderID.claude.rawValue
+    @AppStorage(ProviderRelevance.suppressionStorageKey)
+        private var suppressUnusedProviderWarnings = false
     @AppStorage("dailyCostCapEnabled")      private var costCapEnabled       = true
     @AppStorage("dailyCostCapUsd")          private var costCapUsd: Double   = 5.0
     @AppStorage("skipMergeConfirmation")    private var skipMergeConfirmation = false
@@ -72,10 +75,12 @@ struct GeneralSettings: View {
                     }
                 }
                 .pickerStyle(.segmented)
+
+                Toggle("Only warn about providers I use", isOn: $suppressUnusedProviderWarnings)
             } header: {
                 Text("AI provider")
             } footer: {
-                Text("App-wide default. \"Auto\" picks claude when it's installed, otherwise codex. A repo's `providerOverride` (Settings → Repositories) wins over this; PRDetailView's \"Re-run with…\" menu can override either for a single run. If a chosen provider isn't installed the review fails with a clear message — see Diagnostics for current status.")
+                Text("App-wide default. \"Auto\" picks claude when it's installed, otherwise codex. A repo's `providerOverride` (Settings → Repositories) wins over this; PRDetailView's \"Re-run with…\" menu can override either for a single run. If a chosen provider isn't installed the review fails with a clear message — see Diagnostics for current status.\n\nWhen \"Only warn about providers I use\" is on, PRBar stops flagging a backend you've configured away from as \"not installed\" — both here and in Diagnostics. A provider a repo override still points at keeps its warning; \"Auto\" keeps both, since it runs whichever is present.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -162,11 +167,23 @@ struct GeneralSettings: View {
 
     /// Picker label for one provider — adds "(not installed)" when the
     /// CLI binary isn't on PATH so the user makes an informed choice.
+    /// Suppressed for providers the user has configured away from when
+    /// "Only warn about providers I use" is on.
     private func label(for p: ProviderID) -> String {
-        if providerAvailability[p] == false {
+        if providerAvailability[p] == false, relevantProviders.contains(p) {
             return "\(p.displayName) (not installed)"
         }
         return p.displayName
+    }
+
+    /// Providers whose missing CLI is still worth flagging, given the
+    /// suppression toggle, the app-wide default, and per-repo overrides.
+    private var relevantProviders: Set<ProviderID> {
+        ProviderRelevance.relevantProviders(
+            suppressionEnabled: suppressUnusedProviderWarnings,
+            defaultProviderRaw: defaultProviderRaw,
+            repoOverrides: repoConfigs.userConfigs.compactMap(\.providerOverride)
+        )
     }
 
     /// "Auto" picker label that names which provider would actually
