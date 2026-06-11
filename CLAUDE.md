@@ -61,6 +61,8 @@ xcodebuild -project PRBar.xcodeproj -scheme PRBar -configuration Debug \
 
 This is the fast feedback loop for `ClaudeProviderIntegrationTests` — real-API calls you don't want firing on every full-suite run.
 
+This bare `xcodebuild` skips `bin/regen`, so a **newly added** test file isn't in the project yet and silently won't run (no error, just absent). Run `bin/regen` (or `bin/test`) once after creating a test file before using `-only-testing:`.
+
 ## Architecture (high-level wiring)
 
 `PRBarApp.swift` is `@main`. `AppDelegate` constructs the `@MainActor @Observable` services and exposes them through `.environment(...)`; views read with `@Environment(...)`. The live services:
@@ -94,6 +96,7 @@ Test seams (use these instead of mocking subprocess-y types directly):
 - `ReadinessCoordinator(notifier:, store:)` — inject `NotifiedSHAStore` (use `InMemoryNotifiedSHAStore` from tests) so the persistent dedup doesn't bleed across runs.
 - `ReviewQueueWorker(diffFetcher:, checkoutManager: nil)` — inject the diff source; `provider` is settable so tests use `StubProvider` / `SlowStubProvider` / `ThrowingStubProvider` (in `ReviewQueueWorkerTests`).
 - `ClaudeProvider.buildArgs(bundle:, options:)` is exposed for argv assertion without spawning claude.
+- **`ReviewQueueWorker` test seams:** `reviews` is `private(set)` — seed a pre-existing review state via `_setReviewsForScreenshot([nodeId: ReviewState(...)])`, not `worker.reviews[x] = …` (setter inaccessible). `configResolver` is `@Sendable`, so a test closure can't capture `self`; build `RepoConfig` from a `nonisolated static` helper and call `Self.config(...)` inside the closure.
 
 ## Testing patterns
 
@@ -165,7 +168,7 @@ When you add a field to `InboxPR` / `RepoConfig`, declare it as `var x: T = <def
 - **`open -n APP --args …` forwards remaining args to the launched binary's `CommandLine.arguments`.** Used by `bin/screenshots` to dispatch one stage per launch (`--screenshot-stage <name>`); generic mechanism for any future one-shot launch mode (no URL schemes, no env vars).
 - **`gh api` paths with `?query=…` need shell quoting in zsh.** Bare `gh api repos/.../runs?per_page=3` fails with `(eval):1: no matches found` — zsh expands `?` as a glob. Always quote: `gh api "repos/.../runs?per_page=3"`.
 - **Branch protection on a solo-author repo: `required_approving_review_count: 0`.** GitHub blocks PR authors from approving their own PRs, so any non-zero requirement deadlocks every PR. Combine with `enforce_admins: false` for a clean "PR + CI gate for code, admin override for doc-only edits" setup.
-- **Fork PR CI needs manual approval.** External-fork PRs land their workflow runs in `action_required` — the required `build-test` check never runs, so the PR stays unmergeable until you approve: `gh api --method POST repos/lustefaniak/prbar/actions/runs/<runId>/approve` (find the run via `gh run list --branch <head>`). After the first approval, a contributor's later runs may auto-run. `gh pr checkout` of a fork PR makes a local branch named after the fork's head ref; the compare API 404s (head lives in the fork) — review via `gh pr diff`, not a compare against origin.
+- **Fork PR CI needs manual approval.** External-fork PRs land their workflow runs in `action_required` — the required `build-test` check never runs, so the PR stays unmergeable until you approve: `gh api --method POST repos/lustefaniak/prbar/actions/runs/<runId>/approve` (find the run via `gh run list --branch <head>`). After the first approval, a contributor's later runs may auto-run. `gh pr checkout` of a fork PR makes a local branch named after the fork's head ref; the compare API 404s (head lives in the fork) — review via `gh pr diff`, not a compare against origin. A fork PR that's `BEHIND` main under strict required-checks won't merge until updated — `gh pr update-branch <n>` merges base into the fork branch (re-triggers CI).
 - **A changes-requested review blocks merge even at `required_approving_review_count: 0`.** `mergeStateStatus` stays `BLOCKED` until the reviewer flips it to approve or dismisses it — required-approvals=0 waives the *need* for an approval, it doesn't ignore an active changes-requested verdict.
 - **`InboxPR.reviewDecision == "APPROVED"` is the *aggregate* PR decision, not "the viewer reviewed it."** GitHub drops you from `reviewRequests` once you submit a review, so a PR you reviewed leaves the inbox on its own (role flips `.reviewRequested` → `.other`); a review-request still showing APPROVED is one *someone else* decided. Use `humanReviews.contains(\.isFromViewer)` for "I reviewed it"; `InboxPR.isReviewedByOthers` (APPROVED or CHANGES_REQUESTED) for "another human decided it" — the shared predicate behind the Inbox hide filter and the AI auto-enqueue skip.
 - **Sticky-on-scroll headers need `LazyVStack`.** `Section { … } header: { … }` only pins when the parent is `LazyVStack(pinnedViews: [.sectionHeaders])` — plain `VStack` silently ignores `pinnedViews`. Pinned headers also need an opaque background (`.background(.background)`) or scrolled content bleeds through. `PRDetailView`'s action bar uses this pattern.
