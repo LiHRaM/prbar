@@ -16,7 +16,20 @@ struct PRListView: View {
     @Environment(DiffStore.self) private var diffStore
     @Environment(ActionQueue.self) private var actionQueue
     @Environment(RepoConfigStore.self) private var repoConfigs
+    @Environment(ReviewQueueWorker.self) private var reviewQueue
     @AppStorage("skipMergeConfirmation") private var skipMergeConfirmationGlobal = false
+
+    /// Resolve the AI review status badge for a row from the live review
+    /// map. Nil for rows where no badge should show.
+    private func aiReviewBadge(for pr: InboxPR) -> AIReviewBadge? {
+        let entry = reviewQueue.reviews[pr.nodeId]
+        return AIReviewBadge(
+            status: entry?.status,
+            reviewedSha: entry?.headSha,
+            headSha: pr.headSha,
+            role: pr.role
+        )
+    }
 
     /// Effective "skip merge confirmation" for a PR: per-repo override
     /// wins over the global setting.
@@ -56,7 +69,8 @@ struct PRListView: View {
                                 onMerge: { method in onMergePR(pr, method) },
                                 onRetryAction: { actionQueue.retry(pr.nodeId) },
                                 onDismissAction: { actionQueue.dismissFailure(pr.nodeId) },
-                                skipMergeConfirmation: skipMergeConfirmation(for: pr)
+                                skipMergeConfirmation: skipMergeConfirmation(for: pr),
+                                aiReview: aiReviewBadge(for: pr)
                             )
                             .contentShape(Rectangle())
                             .onTapGesture { onSelect(pr) }

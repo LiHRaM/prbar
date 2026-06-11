@@ -14,6 +14,9 @@ struct PRRowView: View {
     /// When true, merge fires immediately without the confirmation dialog.
     /// Resolved by the parent (per-repo override over the global setting).
     var skipMergeConfirmation: Bool = false
+    /// AI review status for this row, resolved by the parent from
+    /// `ReviewQueueWorker`. Nil renders no badge.
+    var aiReview: AIReviewBadge? = nil
 
     @State private var isHovering = false
     @State private var showMergeConfirm = false
@@ -70,6 +73,7 @@ struct PRRowView: View {
                     }
                     rollupBadge
                     reviewBadge
+                    aiReviewBadge
                 }
             }
             Spacer()
@@ -293,6 +297,49 @@ struct PRRowView: View {
                 .font(.caption2)
         default:
             EmptyView()
+        }
+    }
+
+    /// AI review status. `sparkles` carries the "AI" identity across
+    /// states; colour encodes status, motion (pulse) marks the in-flight
+    /// run. Mirrors `rollupBadge` / `reviewBadge` sizing so the metadata
+    /// row stays visually uniform.
+    @ViewBuilder
+    private var aiReviewBadge: some View {
+        switch aiReview {
+        case .none:
+            EmptyView()
+        case .notYet:
+            Image(systemName: "sparkles")
+                .foregroundStyle(.tertiary)
+                .font(.caption2)
+                .help("AI review: not started")
+        case .queued:
+            Image(systemName: "hourglass")
+                .foregroundStyle(.yellow)
+                .font(.caption2)
+                .help("AI review: queued")
+        case .running:
+            Image(systemName: "sparkles")
+                .foregroundStyle(.orange)
+                .font(.caption2)
+                .symbolEffect(.pulse, options: .repeating)
+                .help("AI review: in progress")
+        case .done:
+            Image(systemName: "sparkles")
+                .foregroundStyle(.green)
+                .font(.caption2)
+                .help("AI review: done")
+        case .doneStale:
+            Image(systemName: "sparkles")
+                .foregroundStyle(.yellow)
+                .font(.caption2)
+                .help("AI review: done for an earlier commit — re-run for the latest")
+        case .failed:
+            Image(systemName: "exclamationmark.bubble.fill")
+                .foregroundStyle(.red)
+                .font(.caption2)
+                .help("AI review failed — open the PR for details")
         }
     }
 }
