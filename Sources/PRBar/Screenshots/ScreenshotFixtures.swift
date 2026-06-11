@@ -223,6 +223,17 @@ enum ScreenshotFixtures {
             status: .completed(reviewForInReview),
             costUsd: 0.078,
             priorReviews: []
+        ),
+        // A second, still-queued review so the inbox screenshot shows two
+        // distinct AI-status badges (done + queued) side by side.
+        prCiFailing.nodeId: ReviewState(
+            prNodeId: prCiFailing.nodeId,
+            providerId: .claude,
+            headSha: prCiFailing.headSha,
+            triggeredAt: Date(timeIntervalSinceNow: -20),
+            status: .queued,
+            costUsd: 0,
+            priorReviews: []
         )
     ]
 
