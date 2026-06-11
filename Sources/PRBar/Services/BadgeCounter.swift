@@ -65,7 +65,7 @@ enum BadgeCounter {
             if sources.ciFailed,
                authoredSide,
                !suppressAuthoredDraft,
-               (pr.checkRollupState == "FAILURE" || pr.checkRollupState == "ERROR") {
+               EventDeriver.isFailing(pr) {
                 c.ciFailed += 1
             }
         }

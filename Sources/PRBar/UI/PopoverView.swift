@@ -24,6 +24,9 @@ struct PopoverView: View {
     @AppStorage(MyDraftHandling.storageKey) private var myDraftHandlingRaw =
         MyDraftHandling.default.rawValue
     @AppStorage(InboxVisibility.hideReviewedByOthersKey) private var hideReviewedByOthersFromInbox = false
+    @AppStorage(MyPRsScope.storageKey) private var myPRsScopeRaw = MyPRsScope.default.rawValue
+    @AppStorage("badgeShowReadyToMerge") private var badgeReadyToMerge = true
+    @AppStorage("badgeShowCIFailed")     private var badgeCIFailed     = true
     private let probedTools = ["gh", "claude", "codex", "git"]
 
     enum Tab: String, CaseIterable, Identifiable, Hashable {
@@ -38,15 +41,15 @@ struct PopoverView: View {
     }
 
     private var myPRsCount: Int {
-        // Match what MyPRsView actually renders — when the user has
-        // opted to hide drafts from My PRs, those drafts must not
-        // count towards the segmented-tab badge either, otherwise the
-        // badge says e.g. "3" while the list shows 1.
-        let hideDrafts = (MyDraftHandling(rawValue: myDraftHandlingRaw) ?? .default).hidesFromMyPRs
-        return poller.prs.filter {
-            ($0.role == .authored || $0.role == .both)
-                && !(hideDrafts && $0.isDraft)
-        }.count
+        // Shares MyPRsView's filter so the segmented-tab badge can't disagree
+        // with the rendered list (badge says "3" while the list shows 1).
+        MyPRsScope.visibleAuthored(
+            from: poller.prs,
+            draftHandling: MyDraftHandling(rawValue: myDraftHandlingRaw) ?? .default,
+            scope: MyPRsScope(rawValue: myPRsScopeRaw) ?? .default,
+            badgeReadyToMerge: badgeReadyToMerge,
+            badgeCIFailed: badgeCIFailed
+        ).count
     }
     private var inboxCount: Int {
         // Match what InboxView actually renders — when the user hides PRs

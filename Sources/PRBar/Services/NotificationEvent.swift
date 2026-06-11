@@ -90,7 +90,10 @@ enum EventDeriver {
         return true
     }
 
-    private static func isFailing(_ pr: InboxPR?) -> Bool {
+    /// Single definition of "CI is red" — the rollup is in a hard-failure
+    /// state. Shared by the badge counters and the My PRs scope filter so
+    /// they agree on what counts as failing.
+    static func isFailing(_ pr: InboxPR?) -> Bool {
         guard let pr else { return false }
         return pr.checkRollupState == "FAILURE" || pr.checkRollupState == "ERROR"
     }

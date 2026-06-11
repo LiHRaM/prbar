@@ -42,6 +42,26 @@ final class BadgeCounterTests: XCTestCase {
         XCTAssertEqual(BadgeCounter.title(prs: prs, sources: .allOn), "")
     }
 
+    func testAuthoredDraftSuppressedWhenIncludeAuthoredDraftsFalse() {
+        // Red CI (not ready-to-merge): isReadyToMerge already guards !isDraft,
+        // so the failing-CI arm is the only way to reach the suppression branch.
+        let pr = makePR(nodeId: "D1", role: .authored, isDraft: true, checkRollupState: "FAILURE")
+        var sources = BadgeCounter.Sources.allOn
+        XCTAssertEqual(BadgeCounter.counts(prs: [pr], sources: sources).ciFailed, 1)
+        sources.includeAuthoredDrafts = false
+        XCTAssertEqual(BadgeCounter.counts(prs: [pr], sources: sources).ciFailed, 0,
+                       "authored draft excluded when includeAuthoredDrafts is off")
+    }
+
+    func testNonFailingCIDoesNotCount() {
+        let prs = [
+            makePR(nodeId: "S1", role: .authored, checkRollupState: "SUCCESS"),
+            makePR(nodeId: "P1", role: .authored, checkRollupState: "PENDING"),
+        ]
+        XCTAssertEqual(BadgeCounter.counts(prs: prs, sources: .allOn).ciFailed, 0,
+                       "only FAILURE/ERROR count as red CI")
+    }
+
     func testBothRoleCountsForBothSources() {
         // role=.both: counts as ready-to-merge AND as review-requested
         // (they're independent counters — the user is responsible *and*
