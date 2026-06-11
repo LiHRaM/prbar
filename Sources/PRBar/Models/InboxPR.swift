@@ -83,6 +83,11 @@ struct InboxPR: Identifiable, Sendable, Hashable, Codable {
     let headRef: String
     let baseRef: String
     let headSha: String           // commit SHA at the head — for diff cache + checkout
+    /// Commit date of the head commit, compared against a CHANGES_REQUESTED
+    /// review's timestamp in `isReviewedByOthers` to tell whether the flagged
+    /// code is still the current head. Optional: defaulted so test constructors
+    /// and payloads that omit the field still load.
+    var headCommittedAt: Date? = nil
     let isDraft: Bool
     let role: PRRole
 
@@ -181,16 +186,36 @@ struct InboxPR: Identifiable, Sendable, Hashable, Codable {
         humanReviews.last { $0.isFromViewer }
     }
 
-    /// True when the PR's aggregate `reviewDecision` is APPROVED or
-    /// CHANGES_REQUESTED. Because GitHub generally drops you from
-    /// requested-reviewers after you submit a review, a review-request still
-    /// surfaced in the Inbox with one of these decisions is one *someone else*
-    /// weighed in on — not one you reviewed. Shared by the Inbox "hide reviewed
-    /// by others" filter and the AI auto-enqueue skip so the two can't drift apart.
+    /// True when another reviewer has handled this PR. Because GitHub generally
+    /// drops you from requested-reviewers after you submit a review, a
+    /// review-request still surfaced in the Inbox with a non-null aggregate
+    /// `reviewDecision` is one *someone else* weighed in on — not one you
+    /// reviewed. Shared by the Inbox "hide reviewed by others" filter, the AI
+    /// auto-enqueue skip, and sequential-focus so they can't drift apart.
+    ///
+    /// APPROVED counts unconditionally (a sign-off; GitHub dismisses approvals
+    /// itself when branch protection requires it). CHANGES_REQUESTED counts only
+    /// while the flagged code is the current head — once the author commits past
+    /// the change-request it is likely addressed, so the PR resurfaces for a
+    /// fresh look rather than staying hidden.
     var isReviewedByOthers: Bool {
         switch (reviewDecision ?? "").uppercased() {
-        case "APPROVED", "CHANGES_REQUESTED": return true
-        default: return false
+        case "APPROVED":
+            return true
+        case "CHANGES_REQUESTED":
+            // Without both timestamps — the head commit date is absent, or the
+            // governing change-request falls outside reviews(last: 20) — fall
+            // back to treating the decision as handled (the reviewDecision
+            // aggregate is authoritative for *whether* one exists; humanReviews
+            // is only a best-effort source for *when*).
+            guard let head = headCommittedAt,
+                  let lastChangeRequest = humanReviews
+                      .filter({ $0.state.uppercased() == "CHANGES_REQUESTED" })
+                      .compactMap(\.submittedAt).max()
+            else { return true }
+            return head <= lastChangeRequest
+        default:
+            return false
         }
     }
 
@@ -208,7 +233,7 @@ struct InboxPR: Identifiable, Sendable, Hashable, Codable {
 extension InboxPR {
     private enum CodingKeys: String, CodingKey {
         case nodeId, owner, repo, number, title, body, url, author
-        case headRef, baseRef, headSha, isDraft, role, state
+        case headRef, baseRef, headSha, headCommittedAt, isDraft, role, state
         case mergeable, mergeStateStatus, reviewDecision, checkRollupState
         case totalAdditions, totalDeletions, changedFiles
         case hasAutoMerge, autoMergeEnabledBy, autoMergeMethod, allCheckSummaries
@@ -234,6 +259,7 @@ extension InboxPR {
         self.headRef = try c.decode(String.self, forKey: .headRef)
         self.baseRef = try c.decode(String.self, forKey: .baseRef)
         self.headSha = try c.decode(String.self, forKey: .headSha)
+        self.headCommittedAt = try c.decodeIfPresent(Date.self, forKey: .headCommittedAt)
         self.isDraft = try c.decode(Bool.self, forKey: .isDraft)
         self.role = try c.decode(PRRole.self, forKey: .role)
         self.state = (try? c.decodeIfPresent(PRState.self, forKey: .state)) ?? .open
@@ -270,6 +296,7 @@ extension InboxPR {
         self.headRef = node.headRefName
         self.baseRef = node.baseRefName
         self.headSha = node.commits.nodes.first?.commit.oid ?? ""
+        self.headCommittedAt = InboxPR.parseISO(node.commits.nodes.first?.commit.committedDate)
         self.isDraft = node.isDraft
         self.state = PRState(githubRawValue: node.state ?? "OPEN")
         self.mergeable = node.mergeable
