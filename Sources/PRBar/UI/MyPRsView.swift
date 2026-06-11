@@ -5,24 +5,48 @@ struct MyPRsView: View {
     @Environment(ActionQueue.self) private var actionQueue
     @AppStorage(MyDraftHandling.storageKey) private var draftHandlingRaw =
         MyDraftHandling.default.rawValue
+    @AppStorage(MyPRsScope.storageKey) private var scopeRaw = MyPRsScope.default.rawValue
+    @AppStorage("badgeShowReadyToMerge") private var badgeReadyToMerge = true
+    @AppStorage("badgeShowCIFailed")     private var badgeCIFailed     = true
     let onSelect: (InboxPR) -> Void
 
     private var draftHandling: MyDraftHandling {
         MyDraftHandling(rawValue: draftHandlingRaw) ?? .default
     }
 
+    private var scope: MyPRsScope {
+        MyPRsScope(rawValue: scopeRaw) ?? .default
+    }
+
     private var myPRs: [InboxPR] {
-        let hideDrafts = draftHandling.hidesFromMyPRs
-        return poller.prs
-            .filter { $0.role == .authored || $0.role == .both }
-            .filter { !(hideDrafts && $0.isDraft) }
-            .sorted(by: Self.priority)
+        MyPRsScope.visibleAuthored(
+            from: poller.prs,
+            draftHandling: draftHandling,
+            scope: scope,
+            badgeReadyToMerge: badgeReadyToMerge,
+            badgeCIFailed: badgeCIFailed
+        )
+        .sorted(by: Self.priority)
+    }
+
+    private var hasAuthoredPRs: Bool {
+        poller.prs.contains { $0.role == .authored || $0.role == .both }
+    }
+
+    /// When the "Show" scope narrows an otherwise-non-empty authored set down
+    /// to nothing, name the active filter — "No PRs you authored" would be
+    /// wrong and leave the user wondering where their PRs went.
+    private var emptyText: String {
+        if scope != .all, hasAuthoredPRs {
+            return "No PRs match the \u{201C}\(scope.pickerLabel)\u{201D} filter."
+        }
+        return "No PRs you authored."
     }
 
     var body: some View {
         PRListView(
             prs: myPRs,
-            emptyText: "No PRs you authored.",
+            emptyText: emptyText,
             isFetching: poller.isFetching,
             lastError: poller.lastError,
             refreshingPRs: poller.refreshingPRs,
@@ -32,32 +56,9 @@ struct MyPRsView: View {
         )
     }
 
-    /// Sort: ready-to-merge first, then has-comments, conflicting, failing,
-    /// in-flight, drafts at the bottom.
+    /// Sort order is defined by `MyPRsCategory`'s case declaration order
+    /// (ready-to-merge first, drafts last) via its synthesized `Comparable`.
     private static func priority(_ a: InboxPR, _ b: InboxPR) -> Bool {
-        bucket(a) < bucket(b)
-    }
-
-    private static func bucket(_ pr: InboxPR) -> Int {
-        if pr.isDraft { return 9 }
-        switch pr.mergeStateStatus {
-        case "CLEAN" where pr.reviewDecision == "APPROVED":
-            return 0   // ready to merge
-        case "BLOCKED" where pr.reviewDecision == "APPROVED":
-            return 1   // approved but waiting on something (CI?)
-        case "DIRTY", "CONFLICTING":
-            return 5   // conflicts — needs rebase
-        default: break
-        }
-        switch pr.checkRollupState {
-        case "FAILURE", "ERROR":
-            return 4   // CI failing — needs attention
-        case "PENDING", "EXPECTED":
-            return 6   // CI in flight
-        default: break
-        }
-        if pr.reviewDecision == "CHANGES_REQUESTED" { return 3 }
-        if pr.reviewDecision == "REVIEW_REQUIRED"  { return 7 }
-        return 8
+        MyPRsCategory.of(a) < MyPRsCategory.of(b)
     }
 }

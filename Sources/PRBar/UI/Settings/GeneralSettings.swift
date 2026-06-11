@@ -11,6 +11,8 @@ struct GeneralSettings: View {
     @AppStorage(MyDraftHandling.storageKey) private var draftHandlingRaw     =
         MyDraftHandling.default.rawValue
     @AppStorage(InboxVisibility.hideReviewedByOthersKey) private var hideReviewedByOthersFromInbox = false
+    @AppStorage(MyPRsScope.storageKey)      private var myPRsScopeRaw        =
+        MyPRsScope.default.rawValue
     @AppStorage("defaultProviderId")        private var defaultProviderRaw   = ProviderID.claude.rawValue
     @AppStorage("dailyCostCapEnabled")      private var costCapEnabled       = true
     @AppStorage("dailyCostCapUsd")          private var costCapUsd: Double   = 5.0
@@ -132,10 +134,15 @@ struct GeneralSettings: View {
                         Text(v.pickerLabel).tag(v.rawValue)
                     }
                 }
+                Picker("Show", selection: $myPRsScopeRaw) {
+                    ForEach(MyPRsScope.allCases, id: \.rawValue) { v in
+                        Text(v.pickerLabel).tag(v.rawValue)
+                    }
+                }
             } header: {
                 Text("My PRs")
             } footer: {
-                Text("Silence keeps drafts visible in the My PRs list but excludes them from the menu-bar badge and CI / ready-to-merge notifications. Hide also removes them from the list until promoted to ready. Review-requested drafts (other people's) are always silenced — that path is separate.")
+                Text("Silence keeps drafts visible in the My PRs list but excludes them from the menu-bar badge and CI / ready-to-merge notifications. Hide also removes them from the list until promoted to ready. Review-requested drafts (other people's) are always silenced — that path is separate.\n\nShow narrows the (non-draft) list: \"Needs my attention\" keeps ready-to-merge, approved-but-waiting, changes-requested, red CI and conflicts; \"Only badge-counted\" keeps just what the menu-bar badge counts.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
