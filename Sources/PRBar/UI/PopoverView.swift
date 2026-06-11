@@ -23,6 +23,7 @@ struct PopoverView: View {
     @AppStorage("sequentialFocusMode") private var sequentialFocusMode = true
     @AppStorage(MyDraftHandling.storageKey) private var myDraftHandlingRaw =
         MyDraftHandling.default.rawValue
+    @AppStorage(InboxVisibility.hideReviewedByOthersKey) private var hideReviewedByOthersFromInbox = false
     private let probedTools = ["gh", "claude", "codex", "git"]
 
     enum Tab: String, CaseIterable, Identifiable, Hashable {
@@ -48,7 +49,11 @@ struct PopoverView: View {
         }.count
     }
     private var inboxCount: Int {
-        poller.prs.filter { $0.role == .reviewRequested || $0.role == .both }.count
+        // Match what InboxView actually renders — when the user hides PRs
+        // already reviewed by others from the list, those must not count
+        // towards the segmented-tab badge either, or the badge and list disagree.
+        let roleFiltered = poller.prs.filter { $0.role == .reviewRequested || $0.role == .both }
+        return InboxVisibility.filter(roleFiltered, hideReviewedByOthers: hideReviewedByOthersFromInbox).count
     }
 
     /// Effective popover height: the live drag value while resizing,
@@ -311,8 +316,9 @@ struct PopoverView: View {
             guard !skippedNodeIds.contains(pr.nodeId) else { return false }
             guard pr.role == .reviewRequested || pr.role == .both else { return false }
             guard !pr.isDraft else { return false }
-            // Skip already-handled (the user approved, or someone else did).
-            if pr.reviewDecision == "APPROVED" { return false }
+            // Skip ones another reviewer already decided (approved or
+            // requested changes) — same predicate as the Inbox hide filter.
+            if pr.isReviewedByOthers { return false }
             // Treat "no review state yet" as ready too — repos with AI off
             // never enqueue, so they'd otherwise be skipped here.
             switch queue.reviews[pr.nodeId]?.status {

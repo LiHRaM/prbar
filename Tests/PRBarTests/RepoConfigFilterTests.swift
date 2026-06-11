@@ -51,13 +51,100 @@ final class RepoConfigFilterTests: XCTestCase {
         XCTAssertEqual(poller.prs.count, 1)
     }
 
-    // MARK: - alreadyReviewedByOthers helper
+    // MARK: - isReviewedByOthers predicate
 
-    func testAlreadyReviewedByOthers() {
-        XCTAssertTrue(ReviewQueueWorker.alreadyReviewedByOthers(makePR(reviewDecision: "APPROVED")))
-        XCTAssertTrue(ReviewQueueWorker.alreadyReviewedByOthers(makePR(reviewDecision: "CHANGES_REQUESTED")))
-        XCTAssertFalse(ReviewQueueWorker.alreadyReviewedByOthers(makePR(reviewDecision: "REVIEW_REQUIRED")))
-        XCTAssertFalse(ReviewQueueWorker.alreadyReviewedByOthers(makePR(reviewDecision: nil)))
+    func testIsReviewedByOthers() {
+        XCTAssertTrue(makePR(reviewDecision: "APPROVED").isReviewedByOthers)
+        XCTAssertTrue(makePR(reviewDecision: "CHANGES_REQUESTED").isReviewedByOthers)
+        XCTAssertFalse(makePR(reviewDecision: "REVIEW_REQUIRED").isReviewedByOthers)
+        XCTAssertFalse(makePR(reviewDecision: nil).isReviewedByOthers)
+    }
+
+    func testChangesRequestedStaysHandledWhileFlaggedCodeIsCurrent() {
+        let reviewedAt = Date(timeIntervalSince1970: 2_000)
+        let committedBefore = Date(timeIntervalSince1970: 1_000)
+        let pr = makePR(
+            reviewDecision: "CHANGES_REQUESTED",
+            headCommittedAt: committedBefore,
+            humanReviews: [changeRequest(at: reviewedAt)]
+        )
+        // Head commit predates the change-request → not addressed yet → handled.
+        XCTAssertTrue(pr.isReviewedByOthers)
+    }
+
+    func testChangesRequestedResurfacesAfterCommitPastReview() {
+        let reviewedAt = Date(timeIntervalSince1970: 1_000)
+        let committedAfter = Date(timeIntervalSince1970: 2_000)
+        let pr = makePR(
+            reviewDecision: "CHANGES_REQUESTED",
+            headCommittedAt: committedAfter,
+            humanReviews: [changeRequest(at: reviewedAt)]
+        )
+        // Author committed past the change-request → likely addressed → resurface.
+        XCTAssertFalse(pr.isReviewedByOthers)
+    }
+
+    func testApprovedIgnoresCommitStaleness() {
+        let pr = makePR(
+            reviewDecision: "APPROVED",
+            headCommittedAt: Date(timeIntervalSince1970: 9_999),
+            humanReviews: [PRReviewSummary(author: "bob", state: "APPROVED",
+                                           submittedAt: Date(timeIntervalSince1970: 1),
+                                           body: "", isFromViewer: false)]
+        )
+        // A sign-off stays "handled" regardless of later commits.
+        XCTAssertTrue(pr.isReviewedByOthers)
+    }
+
+    func testChangesRequestedWithoutTimestampsStaysHandled() {
+        // No head-commit date / no review timestamps (old cache, fixtures) →
+        // conservative default keeps prior behavior (treated as handled).
+        XCTAssertTrue(makePR(reviewDecision: "CHANGES_REQUESTED").isReviewedByOthers)
+    }
+
+    func testChangesRequestedUsesLatestChangeRequest() {
+        let early = Date(timeIntervalSince1970: 1_000)
+        let late = Date(timeIntervalSince1970: 3_000)
+        let between = Date(timeIntervalSince1970: 2_000)
+        // Two reviewers flagged it; head landed between the two flags. The
+        // newest flag (late) postdates the head → still unaddressed → handled.
+        let pr = makePR(
+            reviewDecision: "CHANGES_REQUESTED",
+            headCommittedAt: between,
+            humanReviews: [changeRequest(at: early, from: "alice"),
+                           changeRequest(at: late, from: "bob")]
+        )
+        XCTAssertTrue(pr.isReviewedByOthers)
+    }
+
+    func testChangesRequestedEqualTimestampStaysHandled() {
+        let t = Date(timeIntervalSince1970: 1_000)
+        // Head committed exactly at the change-request time is the flagged
+        // commit itself, not a fix → handled.
+        let pr = makePR(
+            reviewDecision: "CHANGES_REQUESTED",
+            headCommittedAt: t,
+            humanReviews: [changeRequest(at: t)]
+        )
+        XCTAssertTrue(pr.isReviewedByOthers)
+    }
+
+    func testChangesRequestedIgnoresNonChangeRequestReviews() {
+        let flaggedAt = Date(timeIntervalSince1970: 1_000)
+        let approvedLater = Date(timeIntervalSince1970: 5_000)
+        let committedAfterFlag = Date(timeIntervalSince1970: 2_000)
+        // A later APPROVED review must not raise the bar — only CHANGES_REQUESTED
+        // timestamps count. Head postdates the lone change-request → resurface.
+        let pr = makePR(
+            reviewDecision: "CHANGES_REQUESTED",
+            headCommittedAt: committedAfterFlag,
+            humanReviews: [
+                changeRequest(at: flaggedAt),
+                PRReviewSummary(author: "carol", state: "APPROVED",
+                                submittedAt: approvedLater, body: "", isFromViewer: false),
+            ]
+        )
+        XCTAssertFalse(pr.isReviewedByOthers)
     }
 
     // MARK: - Forward-compat Codable
@@ -125,9 +212,11 @@ final class RepoConfigFilterTests: XCTestCase {
     private func makePR(
         nodeId: String = "PR_1",
         title: String = "title",
-        reviewDecision: String? = nil
+        reviewDecision: String? = nil,
+        headCommittedAt: Date? = nil,
+        humanReviews: [PRReviewSummary] = []
     ) -> InboxPR {
-        InboxPR(
+        var pr = InboxPR(
             nodeId: nodeId, owner: "acme", repo: "infra", number: 1,
             title: title, body: "",
             url: URL(string: "https://example.com")!,
@@ -139,6 +228,16 @@ final class RepoConfigFilterTests: XCTestCase {
             hasAutoMerge: false, autoMergeEnabledBy: nil, allCheckSummaries: [],
             allowedMergeMethods: [.squash], autoMergeAllowed: false,
             deleteBranchOnMerge: false
+        )
+        pr.headCommittedAt = headCommittedAt
+        pr.humanReviews = humanReviews
+        return pr
+    }
+
+    private func changeRequest(at submittedAt: Date, from author: String = "bob") -> PRReviewSummary {
+        PRReviewSummary(
+            author: author, state: "CHANGES_REQUESTED",
+            submittedAt: submittedAt, body: "please fix", isFromViewer: false
         )
     }
 }

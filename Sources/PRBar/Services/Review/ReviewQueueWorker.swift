@@ -479,11 +479,11 @@ final class ReviewQueueWorker {
                 PRBarLog.triage.debug("auto-enqueue skip reason=draft pr=\(pr.nameWithOwner, privacy: .public)#\(pr.number, privacy: .public)")
                 continue
             }
-            // Skip PRs already reviewed by another human — the row stays
-            // visible (filter is auto-enqueue-only) but we don't burn an
-            // AI run on something already covered. Manual Re-run still
-            // works.
-            if cfg.skipAIIfReviewedByOthers && Self.alreadyReviewedByOthers(pr) {
+            // Skip the AI run when another human already reviewed — it's
+            // covered, so don't burn cost re-triaging. Inbox visibility is
+            // governed separately by the opt-in hide filter (same predicate);
+            // manual Re-run still works regardless.
+            if cfg.skipAIIfReviewedByOthers && pr.isReviewedByOthers {
                 PRBarLog.triage.debug("auto-enqueue skip reason=already-reviewed-by-others pr=\(pr.nameWithOwner, privacy: .public)#\(pr.number, privacy: .public) decision=\(pr.reviewDecision ?? "nil", privacy: .public)")
                 continue
             }
@@ -501,16 +501,6 @@ final class ReviewQueueWorker {
                 continue
             }
             enqueue(pr)
-        }
-    }
-
-    /// True when at least one other reviewer has weighed in (APPROVED
-    /// or CHANGES_REQUESTED). REVIEW_REQUIRED / nil means nobody has
-    /// reviewed yet so AI triage is still useful.
-    static func alreadyReviewedByOthers(_ pr: InboxPR) -> Bool {
-        switch (pr.reviewDecision ?? "").uppercased() {
-        case "APPROVED", "CHANGES_REQUESTED": return true
-        default: return false
         }
     }
 

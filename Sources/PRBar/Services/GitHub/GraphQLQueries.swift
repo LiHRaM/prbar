@@ -33,6 +33,7 @@ enum GraphQLQueries {
         nodes {
           commit {
             oid
+            committedDate
             statusCheckRollup {
               state
               contexts(first: 30) {

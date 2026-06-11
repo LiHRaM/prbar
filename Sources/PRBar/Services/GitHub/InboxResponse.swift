@@ -113,6 +113,7 @@ struct InboxResponse: Decodable, Sendable {
 
     struct Commit: Decodable, Sendable {
         let oid: String
+        let committedDate: String?
         let statusCheckRollup: StatusCheckRollup?
     }
 

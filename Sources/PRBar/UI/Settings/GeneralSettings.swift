@@ -10,6 +10,7 @@ struct GeneralSettings: View {
     @AppStorage("badgeShowCIFailed")        private var badgeCIFailed        = true
     @AppStorage(MyDraftHandling.storageKey) private var draftHandlingRaw     =
         MyDraftHandling.default.rawValue
+    @AppStorage(InboxVisibility.hideReviewedByOthersKey) private var hideReviewedByOthersFromInbox = false
     @AppStorage("defaultProviderId")        private var defaultProviderRaw   = ProviderID.claude.rawValue
     @AppStorage("dailyCostCapEnabled")      private var costCapEnabled       = true
     @AppStorage("dailyCostCapUsd")          private var costCapUsd: Double   = 5.0
@@ -135,6 +136,16 @@ struct GeneralSettings: View {
                 Text("My PRs")
             } footer: {
                 Text("Silence keeps drafts visible in the My PRs list but excludes them from the menu-bar badge and CI / ready-to-merge notifications. Hide also removes them from the list until promoted to ready. Review-requested drafts (other people's) are always silenced — that path is separate.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section {
+                Toggle("Hide PRs already reviewed by others", isOn: $hideReviewedByOthersFromInbox)
+            } header: {
+                Text("Inbox")
+            } footer: {
+                Text("When on, review requests another reviewer has already approved or requested changes on are removed from the Inbox list instead of sinking to the bottom. PRs still waiting on your review stay visible.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
